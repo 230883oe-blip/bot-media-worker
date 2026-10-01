@@ -1,0 +1,37 @@
+name: media
+# מכונת העיבוד של הבוט. מופעלת בבקשת HTTP מהמוח בענן (Apps Script),
+# ולכן אין שום חלון שצריך לפתוח ושום לחיצה. אובונטו מלא עם ffmpeg.
+#
+# הקלט נושא רק אסימון חד-פעמי (nonce) ולא את הסוד עצמו — העובד פודה
+# אותו מול הענן בעלייה, וכך שום סוד לא יושב ב-GitHub.
+on:
+  workflow_dispatch:
+    inputs:
+      u:
+        description: כתובת המוח בענן
+        required: true
+      n:
+        description: אסימון חד-פעמי
+        required: true
+
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - run: echo "::add-mask::${{ inputs.n }}"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: fonts + tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install -q --disable-pip-version-check yt-dlp telethon
+      - name: worker
+        env:
+          CLOUD_URL: ${{ inputs.u }}
+          CLOUD_NONCE: ${{ inputs.n }}
+          WORKER_DIR: /tmp/mediaworker
+        run: python worker.py
