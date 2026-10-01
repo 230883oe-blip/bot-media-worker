@@ -24,11 +24,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: fonts + tools
+      # 01/10 (ד) — המכונה נתקעה 25 דקות בשלב הזה ומעולם לא הגיעה לעבודה.
+      # נמדד: הריצה דיווחה in_progress על "fonts + tools" ברצף, והענן ראה
+      # worker_alive=false לכל אורכה. הסיבה: `apt-get update` + התקנת ffmpeg
+      # על רנר שבו ffmpeg *כבר מותקן* — מאות מגה של תלויות, ו-apt שנתקע על
+      # שאלה אינטראקטיבית נשאר תקוע עד ה-timeout של כל המשימה (55 דקות).
+      # שלושה כללים שנאכפים כאן עכשיו:
+      #   * לא מתקינים מה שקיים. בודקים ואז מתקינים.
+      #   * DEBIAN_FRONTEND=noninteractive — אחרת apt יכול לחכות לקלט לנצח.
+      #   * תקרת זמן *לשלב* + continue-on-error: שלב התקנה שנתקע לא יבלע
+      #     את המכונה ולא ימנע מהעובד לעלות בכלל. ההתקנה היא נוחות; העובד
+      #     הוא העבודה.
+      - name: fonts
+        timeout-minutes: 6
+        continue-on-error: true
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
-          python -m pip install -q --disable-pip-version-check yt-dlp telethon
+          if ffmpeg -version >/dev/null 2>&1; then
+            echo "ffmpeg כבר מותקן: $(ffmpeg -version | head -1)"
+          else
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          if fc-list 2>/dev/null | grep -qi dejavu; then
+            echo "גופן DejaVu קיים"
+          else
+            sudo apt-get install -y -qq fonts-dejavu-core
+          fi
+      # pip הוא חובה: בלי yt-dlp אין הורדה ובלי telethon אין קובץ מעל 20 מגה.
+      - name: tools
+        timeout-minutes: 8
+        run: python -m pip install -q --disable-pip-version-check yt-dlp telethon
       - name: worker
         env:
           CLOUD_URL: ${{ inputs.u }}
