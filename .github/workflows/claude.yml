@@ -1,11 +1,23 @@
 name: claude
-# מכסת Claude Code בענן (01/10/2026).
+# מכסת Claude Code בענן (01/10/2026, הורחב 02/10/2026).
 #
 # למה זה קיים: המחשב של המשתמש הוא היחיד שבו מותקן Claude Code, ולכן
 # כשהוא כבוי אין שום דרך להשתמש במכסת המנוי. GitHub Actions נותן אובונטו
 # שלם, חינם, בלי כרטיס אשראי, ומופעל בבקשת HTTP אחת - כלומר גם המוח בענן
 # (Apps Script) יכול להפעיל אותו לבד. Claude Code מותקן כאן בכל ריצה
 # ומזדהה עם אסימון המנוי שיושב כסוד מוצפן בריפו.
+#
+# 02/10 - מה השתנה ולמה. עד היום הריצה הזו עבדה בתיקייה *ריקה*: לא היה
+# לה את הקוד של הבוטים, ולכן כל בקשה שנגעה בקובץ אמיתי נחסמה במוח
+# (HOME_BOUND) ונשמרה לתור עד שהמחשב יידלק. המשתמש ביקש שבמצב ענן
+# הבוט יתנהג כמו במצב רגיל - יבצע, לא "ישמור אצלי". לכן:
+#   * ברירת המחדל היא לשכפל את מאגר-המראה הפרטי `bots-mirror` (קוד
+#     הבוטים בלבד, בלי סודות ובלי היסטוריה) לתוך /tmp/ws/repo.
+#   * אחרי הריצה, כל שינוי שקלוד עשה נדחף לענף `cloud/<חותמת>` ולא
+#     ל-main. המחשב הביתי מוריד אותו, בודק ומחיל (cloudapply.py).
+#     ענף ולא main - כי ריצה בענן לא מריצה את הבוטים ואי אפשר לאמת שם.
+#   * סיכום השינוי נדבק לתשובה שנשלחת לטלגרם, כדי שהמשתמש ידע אם
+#     באמת נעשתה עבודה או רק נכתב טקסט.
 #
 # מלכודות שנכתבו כאן במפורש:
 #   * ב-headless (`-p`) כל שימוש בכלי נחסם עד שמאשרים. על רנר חד-פעמי
@@ -16,6 +28,9 @@ name: claude
 #   * `npm i -g` על ubuntu-latest עם setup-node לא צריך sudo.
 #   * שלב השליחה הוא `if: always()` - תשובה חלקית או שגיאה חייבות להגיע
 #     למשתמש, אחרת הוא מחכה לנצח להודעה שלא תבוא.
+#   * הריפו הזה ציבורי (ככה דקות הריצה בלתי מוגבלות), ולכן אסור להדפיס
+#     כאן תוכן קוד מהמראה הפרטי. הדחיפה שקטה ומודפס רק שם הענף ומניין
+#     הקבצים.
 on:
   workflow_dispatch:
     inputs:
@@ -31,7 +46,11 @@ on:
         required: false
         default: '25'
       repo:
-        description: ריפו לעבוד עליו (ריק = תיקייה ריקה)
+        description: ריפו לעבוד עליו (ריק = מאגר המראה bots-mirror)
+        required: false
+        default: ''
+      nocode:
+        description: '1 = בלי שכפול קוד כלל (שאלה כללית)'
         required: false
         default: ''
 
@@ -50,13 +69,34 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
 
       - name: הכנת תיקיית עבודה
+        id: ws
         env:
           WREPO: ${{ inputs.repo }}
+          NOCODE: ${{ inputs.nocode }}
+          OWNER: ${{ github.repository_owner }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           mkdir -p /tmp/ws
-          if [ -n "$WREPO" ]; then
-            git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${WREPO}.git" /tmp/ws/repo || true
+          echo "dir=/tmp/ws" >> "$GITHUB_OUTPUT"
+          if [ "$NOCODE" = "1" ]; then
+            echo "אין שכפול קוד (nocode=1)"
+            exit 0
+          fi
+          TARGET="$WREPO"
+          if [ -z "$TARGET" ]; then TARGET="${OWNER}/bots-mirror"; fi
+          if git clone --depth 20 \
+               "https://x-access-token:${GH_TOKEN}@github.com/${TARGET}.git" \
+               /tmp/ws/repo >/dev/null 2>/tmp/clone_err.txt; then
+            echo "repo=$TARGET" >> "$GITHUB_OUTPUT"
+            echo "dir=/tmp/ws/repo" >> "$GITHUB_OUTPUT"
+            echo "שוכפל: $TARGET ($(find /tmp/ws/repo -type f -name '*.py' | wc -l) קובצי פייתון)"
+            cd /tmp/ws/repo
+            git config user.email "cloud-claude@users.noreply.github.com"
+            git config user.name "קלוד ענן"
+            git rev-parse HEAD > /tmp/base_sha.txt
+          else
+            echo "שכפול נכשל - עובדים בתיקייה ריקה"
+            tail -c 300 /tmp/clone_err.txt | sed -E 's#x-access-token:[^@]*@#***@#g'
           fi
 
       - name: הרצת קלוד
@@ -65,9 +105,10 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           TASK: ${{ inputs.task }}
           MINUTES: ${{ inputs.minutes }}
-        working-directory: /tmp/ws
+          WSDIR: ${{ steps.ws.outputs.dir }}
         run: |
           set +e
+          cd "${WSDIR:-/tmp/ws}"
           printenv TASK > /tmp/task.txt
           timeout "${MINUTES}m" claude -p "$(cat /tmp/task.txt)" \
             --dangerously-skip-permissions \
@@ -75,21 +116,57 @@ jobs:
           rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           echo "--- rc=$rc ---"
-          head -c 4000 /tmp/answer.txt
-          echo ""
+          echo "אורך התשובה: $(wc -c < /tmp/answer.txt) תווים"
           echo "--- stderr ---"
-          tail -c 2000 /tmp/err.txt
+          tail -c 1000 /tmp/err.txt
+
+      - name: דחיפת השינוי לענף ענן
+        id: push
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ steps.ws.outputs.repo }}
+        run: |
+          set +e
+          : > /tmp/note.txt
+          if [ -z "$REPO" ] || [ ! -d /tmp/ws/repo/.git ]; then
+            echo "אין מאגר - אין מה לדחוף"
+            exit 0
+          fi
+          cd /tmp/ws/repo
+          git add -A
+          if git diff --cached --quiet; then
+            echo "קלוד לא שינה אף קובץ"
+            printf '\n— לא שונו קבצים בענן (תשובה בלבד).\n' > /tmp/note.txt
+            exit 0
+          fi
+          STAT=$(git diff --cached --stat | tail -1)
+          NAMES=$(git diff --cached --name-only | head -12 | tr '\n' ' ')
+          BR="cloud/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_RUN_ID}"
+          git checkout -q -b "$BR"
+          git commit -q -m "קלוד ענן: ${BR}" -m "$(head -c 300 /tmp/task.txt)"
+          git push -q origin "$BR" 2>/tmp/push_err.txt
+          if [ $? -eq 0 ]; then
+            echo "branch=$BR" >> "$GITHUB_OUTPUT"
+            {
+              printf '\n— שיניתי קבצים בפועל: %s\n' "$NAMES"
+              printf '%s\n' "$STAT"
+              printf 'השינוי שמור בענן ויוחל במחשב ברגע שיידלק (ענף %s).\n' "$BR"
+            } > /tmp/note.txt
+            echo "נדחף: $BR"
+          else
+            printf '\n— ניסיתי לשנות קבצים אך הדחיפה לענן נכשלה.\n' > /tmp/note.txt
+            tail -c 300 /tmp/push_err.txt | sed -E 's#x-access-token:[^@]*@#***@#g'
+          fi
           exit 0
 
       - name: סיכום לדף הריצה
         if: always()
         run: |
           {
-            echo "### תשובת קלוד מהענן"
-            echo '```'
-            head -c 60000 /tmp/answer.txt 2>/dev/null || echo "(ריק)"
-            echo '```'
+            echo "### ריצת קלוד מהענן"
             echo "קוד יציאה: ${{ steps.run.outputs.rc }}"
+            echo "ענף שינוי: ${{ steps.push.outputs.branch }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: שליחה לטלגרם
@@ -98,7 +175,9 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           CHAT: ${{ inputs.chat }}
           RC: ${{ steps.run.outputs.rc }}
-        run: python3 cloudclaude/tg_send.py /tmp/answer.txt /tmp/err.txt
+        run: |
+          cat /tmp/note.txt >> /tmp/answer.txt 2>/dev/null || true
+          python3 cloudclaude/tg_send.py /tmp/answer.txt /tmp/err.txt
 
       - name: שמירת התשובה כפלט
         if: always()
