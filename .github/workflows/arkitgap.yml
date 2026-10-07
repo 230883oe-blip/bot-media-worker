@@ -1,0 +1,70 @@
+name: arkit-gap
+
+# אימות סגירת שבעת פערי ARKit-52, **בענן בלבד** (הנחיית המשתמש, 08/10:
+# "עקוף לחלוטין את בדיקת הזיכרון המקומי... נתב את כל משימת סגירת
+# הפערים הזו באופן ישיר לענן").
+#
+# שלוש החלטות, וכל אחת מהן תיקון של מה שנמדד ב-`animbatch.yml` ב-07/10:
+#  * ``ubuntu-24.04-arm`` ולא macOS: אין כאן שום צורך ב-GPU - החישוב
+#    כולו numpy על מעבד - ורנרי ARM נמדדו המהירים בכל שלב. macOS היה
+#    מחכה בתור ומבזבז דקות על torch שלא נדרש.
+#  * שתי עבודות ולא אחת. הבדיקות (ארוכות, ~10 דק') ומדידת הצורות
+#    (קצרה) אינן תלויות זו בזו, ועבודה אחת הייתה מסתירה את התוצאה
+#    המעניינת מאחורי ההמתנה לארוכה. כל אחת מעלה artifact משלה.
+#  * ``if: always()`` על ההעלאה. בלעדיו כשל בבדיקה היה משאיר אותנו
+#    בלי שום JSON להסתכל בו - וזה בדיוק הרגע שבו הוא נחוץ.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'תווית הרנר'
+        required: false
+        default: 'ubuntu-24.04-arm'
+      ticket:
+        description: 'מזהה הכרטיס (לשיוך בחזרה)'
+        required: false
+        default: ''
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [shapes, tests]
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 50
+    env:
+      GAP_TICKET: ${{ inputs.ticket }}
+      GAP_PART: ${{ matrix.part }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: unpack sources
+        run: |
+          python -c "import zipfile;zipfile.ZipFile('arkitgap/sources.zip').extractall('.')"
+          ls -1 rig | head -20
+
+      - name: deps
+        run: python -m pip install --quiet --disable-pip-version-check numpy
+
+      # מדידת שבע הצורות ושער המיפוי - החלק הקצר, חוזר ראשון.
+      - name: shapes + gate
+        if: matrix.part == 'shapes'
+        run: python gpucloud/arkitgap_job.py --only shapes
+
+      # חבילת הבדיקות המלאה של הריג.
+      - name: full test suite
+        if: matrix.part == 'tests'
+        run: python gpucloud/arkitgap_job.py --only tests
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arkitgap-${{ matrix.part }}
+          path: gpucloud/result.json
+          if-no-files-found: warn
