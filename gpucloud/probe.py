@@ -103,7 +103,11 @@ def torch_bench() -> dict:
         return res
 
     res.update(available=True, backend=kind)
-    n, iters = 2048, 40
+    # מלכודת (07/10): על macos-14 (M1 וירטואלי, 7GB משותפים) מטריצה של
+    # 2048 נפלה ב-"MPS backend out of memory" למרות שהתקרה 7.93GB. על
+    # אפל הזיכרון משותף עם המערכת, ולכן ההקצאה בפועל קטנה בהרבה. 1024
+    # עובר על שני הרנרים ועדיין רווי-חישוב (פי 2 מיליארד פעולות לסבב).
+    n, iters = 1024, 60
 
     def run(device, sync) -> float:
         a = torch.randn(n, n, device=device)
@@ -197,6 +201,9 @@ def find_chrome() -> str | None:
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         "google-chrome", "chromium-browser", "chromium", "microsoft-edge",
     ]
     for c in cands:
@@ -216,8 +223,15 @@ def webgl_bench(angle: str | None) -> dict:
     page = HERE / "webgl.html"
     page.write_text(PAGE, encoding="utf-8")
     prof = HERE / f"prof_{angle or 'hw'}"
+    # מלכודת (07/10): על macOS הריצה נתקעה ב-300 שניות ולא החזירה DOM.
+    # הסיבה היא Keychain: Chrome מבקש גישה למחסן המפתחות של המשתמש, ועל
+    # רנר בלי מושב גרפי הבקשה לא נענית לעולם. `--use-mock-keychain` פותר
+    # את זה. הוא מזיק לאיש, ולכן הוא כאן בכל מערכת ולא רק באפל.
     args = [chrome, "--headless=new", "--dump-dom", "--no-sandbox",
             "--disable-dev-shm-usage", "--no-first-run",
+            "--no-default-browser-check", "--use-mock-keychain",
+            "--disable-sync", "--disable-background-networking",
+            "--disable-extensions", "--mute-audio",
             f"--user-data-dir={prof}", "--enable-unsafe-swiftshader",
             page.as_uri()]
     if angle:
