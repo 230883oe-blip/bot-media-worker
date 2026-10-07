@@ -13,9 +13,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-14, macos-13, ubuntu-latest]
+        # macos-13 הוא Intel בלי GPU נגיש, והתור שלו היה 12 דקות. הוסר.
+        os: [macos-15, macos-14, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 25
+    env:
+      # על אפל הזיכרון משותף; בלי זה MPS מסרב להקצות על רנר של 7GB.
+      PYTORCH_MPS_HIGH_WATERMARK_RATIO: '0.0'
     steps:
       - uses: actions/checkout@v4
 
