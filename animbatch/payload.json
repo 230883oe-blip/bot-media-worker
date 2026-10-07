@@ -1,0 +1,68 @@
+{
+ "version": 1,
+ "created": 1791372564.1,
+ "jobs": [
+  {
+   "task": "measure",
+   "script": "park90",
+   "tuning": {
+    "smooth_win": 0.08
+   }
+  },
+  {
+   "task": "measure",
+   "script": "park90",
+   "tuning": {
+    "smooth_win": 0.12
+   }
+  },
+  {
+   "task": "measure",
+   "script": "park90",
+   "tuning": {
+    "smooth_win": 0.16
+   }
+  },
+  {
+   "task": "measure",
+   "script": "park90",
+   "tuning": {
+    "smooth_win": 0.2
+   }
+  },
+  {
+   "task": "measure",
+   "script": "park90",
+   "tuning": {
+    "smooth_win": 0.24
+   }
+  },
+  {
+   "task": "measure",
+   "script": "park90",
+   "tuning": {
+    "smooth_win": 0.28
+   }
+  }
+ ],
+ "shards": [
+  [
+   "measure|park90|smooth_win=0.08"
+  ],
+  [
+   "measure|park90|smooth_win=0.12"
+  ],
+  [
+   "measure|park90|smooth_win=0.16"
+  ],
+  [
+   "measure|park90|smooth_win=0.2"
+  ],
+  [
+   "measure|park90|smooth_win=0.24"
+  ],
+  [
+   "measure|park90|smooth_win=0.28"
+  ]
+ ]
+}
