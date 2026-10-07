@@ -1,0 +1,44 @@
+name: bench-fanout
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        default: "1.0"
+
+# שאלת ה-ROI האמיתית: לא "האם צומת ענן אחד מהיר יותר", אלא
+# "כמה סרטונים אפשר לרנדר בבת אחת". מאגר ציבורי מקבל עד 20 ריצות
+# במקביל בחינם, ולכן כאן נמדדות שש עבודות זהות בו-זמנית - וזמן
+# הקיר של כולן יחד הוא המספר שקובע.
+jobs:
+  fan:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --quiet --disable-pip-version-check numpy av
+      - name: run
+        run: |
+          S=$(date +%s)
+          python bench/workload.py --scale "${{ inputs.scale }}" \
+            --out /tmp/e.mp4 > r.json
+          E=$(date +%s)
+          python - <<PY
+          import json, pathlib
+          p = pathlib.Path("r.json"); d = json.loads(p.read_text(encoding="utf-8"))
+          d["cloud"] = {"wall_seconds": $((E-S))}
+          d["runner_label"] = "ubuntu-24.04-arm"
+          d["shard"] = ${{ matrix.shard }}
+          p.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+          PY
+          cp r.json "result-shard${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fan-${{ matrix.shard }}
+          path: result-*.json
