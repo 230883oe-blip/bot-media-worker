@@ -1,0 +1,72 @@
+name: identity-verify
+
+# אימות "זהות הדמות" בענן (הנחיית המשתמש, 08/10: "תתקן זהות הדמות
+# ותריץ אימות אמיתי בענן ותעשה סימולציה").
+#
+# שלוש החלטות, וכולן לקוחות מ-`arkitgap.yml` שעבד כאן ב-08/10:
+#  * ``ubuntu-24.04-arm``: החישוב כולו numpy על מעבד, אין צורך ב-GPU,
+#    ורנרי ARM נמדדו המהירים בכל שלב.
+#  * שתי עבודות ולא אחת: מדידת הזהות (4 שניות) אינה מחכה לחבילת
+#    הבדיקות (עשר דקות), וכשל באחת נראה בנפרד מכשל בשנייה.
+#  * ``if: always()`` על ההעלאה - בלעדיו כשל משאיר אותנו בלי JSON
+#    בדיוק ברגע שבו הוא נחוץ.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'תווית הרנר'
+        required: false
+        default: 'ubuntu-24.04-arm'
+      ticket:
+        description: 'מזהה הכרטיס (לשיוך בחזרה)'
+        required: false
+        default: ''
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [identity, tests]
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 60
+    env:
+      ID_TICKET: ${{ inputs.ticket }}
+      ID_PART: ${{ matrix.part }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: unpack sources
+        run: |
+          python -c "import zipfile;zipfile.ZipFile('identityverify/sources.zip').extractall('.')"
+          ls -1 rig | head -20
+
+      # numpy + Pillow. שתיהן נדרשות: `rig.park` מצייר רקיע ב-PIL,
+      # ובלעדיה חבילת הבדיקות קורסת באמצע. `av` לא מותקן בכוונה -
+      # הוא נדרש רק לרינדור וידאו, שאינו רץ כאן.
+      - name: deps
+        run: |
+          python -m pip install --quiet --disable-pip-version-check \
+            numpy pillow
+
+      # מדידת הזהות, הגלאי ושער האיכות - החלק הקצר, חוזר ראשון.
+      - name: identity + probe + gate
+        if: matrix.part == 'identity'
+        run: python gpucloud/identity_job.py --only identity
+
+      # שתי חבילות הבדיקות.
+      - name: test suites
+        if: matrix.part == 'tests'
+        run: python gpucloud/identity_job.py --only tests
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: identity-${{ matrix.part }}
+          path: gpucloud/result.json
+          if-no-files-found: warn
