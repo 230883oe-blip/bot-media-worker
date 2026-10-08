@@ -46,13 +46,16 @@ jobs:
           python -c "import zipfile;zipfile.ZipFile('identityverify/sources.zip').extractall('.')"
           ls -1 rig | head -20
 
-      # numpy + Pillow. שתיהן נדרשות: `rig.park` מצייר רקיע ב-PIL,
-      # ובלעדיה חבילת הבדיקות קורסת באמצע. `av` לא מותקן בכוונה -
-      # הוא נדרש רק לרינדור וידאו, שאינו רץ כאן.
+      # numpy + Pillow + PyAV. שלושתן נדרשות: `rig.park` מצייר רקיע
+      # ב-PIL ובלעדיה חבילת הבדיקות קורסת באמצע, ו-**`av` נוסף
+      # ב-08/10** כי הממד הטכני נמדד מעכשיו בכל סביבה: `studio/
+      # techcheck.py` מקודד קליפ זעיר אמיתי ומפענח אותו בחזרה. בלי
+      # `av` בענן הממד הזה חוזר להיות "לא נמדד" בדיוק כפי שהיה,
+      # ובדיקת הצינור קורסת בייבוא. אין צורך בדפדפן ואין צורך ב-GPU.
       - name: deps
         run: |
           python -m pip install --quiet --disable-pip-version-check \
-            numpy pillow
+            numpy pillow av
 
       # מדידת הזהות, הגלאי ושער האיכות - החלק הקצר, חוזר ראשון.
       - name: identity + probe + gate
