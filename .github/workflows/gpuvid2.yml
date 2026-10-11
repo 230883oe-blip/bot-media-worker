@@ -15,9 +15,9 @@ on:
         required: false
         default: ''
       steps:
-        description: 'קטעים לכל רנר'
+        description: 'קטעים לכל רנר (תקרה 3 - מעבר לזה הארנק נגמר)'
         required: false
-        default: '4'
+        default: '3'
       secs:
         description: 'שניות לקטע'
         required: false
@@ -44,8 +44,13 @@ jobs:
         continue-on-error: true
         env:
           SHARD: ${{ matrix.shard }}
-          STEPS: ${{ inputs.steps || '4' }}
+          # STEPS כאן הוא גיבוי בלבד. המספר הקובע הוא
+          # `plan[SHARD-1]` מתוך `gpuvid/beats.json`, כדי שחלוקה
+          # לא-שווה (3,3,2) תעבוד ושרנר של שוט ששמור במטמון יצא
+          # מיד בלי לגעת ב-GPU.
+          STEPS: ${{ inputs.steps || '3' }}
           SECS: ${{ inputs.secs || '3' }}
+          PACE: '8'
         run: python gpuvid/chain.py
       - uses: actions/upload-artifact@v4
         if: always()
