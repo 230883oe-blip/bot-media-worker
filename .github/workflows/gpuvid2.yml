@@ -1,0 +1,50 @@
+name: gpu-video-chain
+
+# הפקת סרטון הנפשה על A10G חינמי, במקביל על כמה רנרים.
+# כל רנר הוא **כתובת IP אחרת**, כלומר ארנק ZeroGPU נפרד - וזה
+# מה שהופך את זה למאגר נקודות קצה ולא לנקודה בודדת שנחנקת.
+# מאגר ציבורי = דקות בלתי מוגבלות.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'מזהה כרטיס'
+        required: false
+        default: ''
+      steps:
+        description: 'קטעים לכל רנר'
+        required: false
+        default: '4'
+      secs:
+        description: 'שניות לקטע'
+        required: false
+        default: '3'
+
+jobs:
+  chain:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client pillow av
+      - name: chain
+        continue-on-error: true
+        env:
+          SHARD: ${{ matrix.shard }}
+          STEPS: ${{ inputs.steps || '4' }}
+          SECS: ${{ inputs.secs || '3' }}
+        run: python gpuvid/chain.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chain-${{ matrix.shard }}-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
