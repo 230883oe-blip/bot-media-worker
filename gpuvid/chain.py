@@ -130,9 +130,6 @@ for i in range(STEPS):
                             bytes=dst.stat().st_size, beat=beat[:70], ok=True))
             print("OK  קטע %d/%d  %s  %dKB  %.1fs"
                   % (i + 1, STEPS, sid, kb, time.time() - t), flush=True)
-            nxt = last_frame(dst, Path("next_%d.png" % i))
-            if nxt:
-                cur = nxt
             done = True
             break
         except BaseException as e:
@@ -145,6 +142,20 @@ for i in range(STEPS):
     if not done:
         print("כל המרחבים סירבו בקטע %d - עוצר את השרשרת" % (i + 1), flush=True)
         break
+
+    # חילוץ הפריים האחרון הוא **מחוץ** לניסיון הקריאה. הוא נכשל
+    # בריצה הראשונה (numpy חסר), והכישלון נתפס ב-except של המרחב -
+    # כלומר קריאת GPU שהצליחה נרשמה ככישלון, המרחב הוחלף, והשרשרת
+    # נעצרה אחרי קטע אחד. כשל בעיבוד מקומי אינו כשל של השרת.
+    try:
+        nxt = last_frame(OUT / ("seg_%d_%02d.mp4" % (SHARD, i)),
+                         Path("next_%d.png" % i))
+        if nxt:
+            cur = nxt
+    except BaseException as e:
+        print("אזהרה: לא חולץ פריים המשך (%s: %s) - ממשיכים מהקודם"
+              % (type(e).__name__, str(e)[:120]), flush=True)
+
     time.sleep(3)      # מרווח נשימה: רצף predict מהיר מחזיר 429
 
 (OUT / ("chain_%d.json" % SHARD)).write_text(
