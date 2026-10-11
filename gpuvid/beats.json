@@ -1,26 +1,17 @@
-[
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the bearded man slowly lifts the cup and sips, the girl watches him, subtle natural motion",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man lowers the cup, the girl tilts her head and smiles, her hair moves gently in the breeze",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, both blink and breathe naturally, soft camera push in, light flickers through the trees",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the girl laughs lightly, her shoulders move, the man smiles back",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man sets the cup down on the table, slow natural hand motion",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, both settle, calm breathing, warm light on their faces",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the girl leans forward on the table and speaks, her expression animated",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man listens and nods slowly, eyes attentive",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man answers, his mouth moves, the girl reacts with a small smile",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, both laugh warmly together, eyes crinkle",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the girl brushes hair behind her ear, natural gesture",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, a comfortable pause, both breathe, gentle camera drift",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man turns his head toward the sunset, the girl follows his gaze",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, slow camera drift to the right, warm orange rim light grows",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the sun sinks lower behind them, soft lens flare, hair glows",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, a breeze moves their clothes and hair, leaves drift past",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the girl closes her eyes for a moment, enjoying the warmth",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man glances back at her, soft expression",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the man raises the cup again in a small toast, the girl laughs",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, they clink gently, warm cozy evening atmosphere",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, both lean back, relaxed, the light turns deep amber",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, slow cinematic pull back, the balcony and the sky open up",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, the characters sit together quietly in the golden light",
- "cinematic 3d animated film, pixar style, two characters on a balcony at golden hour, warm sunset backlight, shallow depth of field, final calm moment, very slow push out, the sun almost gone"
-]
+{
+ "v": 2,
+ "plan": [
+  2,
+  2
+ ],
+ "beats": [
+  [
+   "cinematic 3d animated film, subtle natural motion, the character breathes and blinks, warm light, shallow depth of field",
+   "cinematic 3d animated film, the character turns the head slightly and smiles, hair moves gently, soft camera push in"
+  ],
+  [
+   "cinematic 3d animated film, gentle breeze, light flickers, the character shifts weight naturally, slow camera drift",
+   "cinematic 3d animated film, slow cinematic pull back, calm closing moment, warm golden light"
+  ]
+ ]
+}
