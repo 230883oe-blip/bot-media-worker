@@ -1,0 +1,54 @@
+name: gpu-video
+
+# שתי שאלות נמדדות כאן, ושתיהן לא נמדדו עד היום:
+#  1. האם כתובת ה-IP של רנר GitHub מחזיקה ארנק ZeroGPU אנונימי.
+#  2. האם לרנר macos-15 יש Metal/MPS בפועל - כלומר כרטיס מסך
+#     חינמי שמריץ את *הקוד שלנו*, ולא דמו של מישהו אחר.
+# מאגר ציבורי = דקות בלתי מוגבלות, כולל macOS.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'מזהה כרטיס'
+        required: false
+        default: ''
+
+jobs:
+  zerogpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: ספריות
+        run: pip -q install gradio_client pillow
+      - name: ארנק והנפשה
+        continue-on-error: true
+        run: python gpuvid/zerogpu_try.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zerogpu-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  mps:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: ספריות
+        run: pip -q install torch
+      - name: מדידת Metal
+        continue-on-error: true
+        run: python gpuvid/mps_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mps-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
