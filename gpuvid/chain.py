@@ -18,13 +18,44 @@ import time
 from pathlib import Path
 
 SHARD = int(os.environ.get("SHARD", "1"))
-STEPS = int(os.environ.get("STEPS", "4"))
+STEPS = int(os.environ.get("STEPS", "3"))
 SECS = float(os.environ.get("SECS", "3"))
+#: מרווח נשימה בין שתי קריאות predict. נמדד: רצף מהיר מחזיר 429,
+#: ו-429 מסווג כמכסה - כלומר הקצב שלנו, ולא הארנק, מוציא מרחב חי
+#: מהמחזור. 3 שניות לא הספיקו תמיד; 8 הן המרווח שנמדד בבית.
+PACE = float(os.environ.get("PACE", "8"))
 OUT = Path("artifacts")
 OUT.mkdir(exist_ok=True)
 IMG = Path("gpuvid/frame.png")
 
-BEATS = json.loads(Path("gpuvid/beats.json").read_text(encoding="utf-8"))
+# מבנה v2: {"plan": [3,0,2], "beats": [[..],[..],[..]]} - פקודות
+# **מקוננות לפי שוט**, ותוכנית שאומרת לכל רנר כמה קטעים שלו.
+# הגרסה הקודמת שלחה רשימה שטוחה ו-chain חישב (SHARD-1)*STEPS+i;
+# ברגע שהחלוקה אינה שווה (3,3,2) האינדקס גלש לשוט של מישהו אחר.
+_RAW = json.loads(Path("gpuvid/beats.json").read_text(encoding="utf-8"))
+if isinstance(_RAW, dict):
+    _PLAN = list(_RAW.get("plan") or [])
+    _NEST = list(_RAW.get("beats") or [])
+    BEATS = _NEST[SHARD - 1] if SHARD - 1 < len(_NEST) else []
+    if _PLAN:
+        STEPS = int(_PLAN[SHARD - 1]) if SHARD - 1 < len(_PLAN) else 0
+else:
+    # פורמט ישן: רשימה שטוחה. היא **נחתכת כאן לשוט** ולא נקראת
+    # באינדקס מחושב בתוך הלולאה - כך הלולאה נשארת עם `BEATS[i]`
+    # בלבד, ואין שני מקומות שצריכים להסכים על אותו חישוב.
+    _a = (SHARD - 1) * STEPS
+    BEATS = list(_RAW[_a:_a + STEPS]) or list(_RAW[-1:])
+
+# **0 הוא תשובה חוקית.** שוט שכל קטעיו במטמון אינו מצית GPU כלל:
+# הרנר עולה, רואה 0, ויוצא. זה סעיף "מטמון חכם" של הפרוטוקול -
+# דקות ריצה ותור הרנרים הם משאב, גם כשהארנק מתחדש.
+if STEPS <= 0 or not BEATS:
+    (OUT / ("chain_%d.json" % SHARD)).write_text(
+        json.dumps(dict(shard=SHARD, made=[], log=[], skipped=True),
+                   ensure_ascii=False), encoding="utf-8")
+    print("שורה %d: אין קטעים לשורה הזו - יוצא בלי לגעת ב-GPU" % SHARD,
+          flush=True)
+    raise SystemExit(0)
 NEG = ("static, still image, frozen, blurry, distorted, deformed face, "
        "extra limbs, text, watermark, jitter")
 
@@ -110,8 +141,10 @@ cur = Path("seed.png")
 shutil.copy(IMG, cur)
 
 for i in range(STEPS):
-    idx = (SHARD - 1) * STEPS + i
-    beat = BEATS[idx] if idx < len(BEATS) else BEATS[-1]
+    # BEATS כבר מקונן לשוט הזה, ולכן האינדקס הוא `i` ולא
+    # `(SHARD-1)*STEPS+i` - החישוב ההוא גלש לשוט אחר בחלוקה
+    # לא-שווה, והרנר האחרון קיבל את הפקודות של קודמו.
+    beat = BEATS[i] if i < len(BEATS) else BEATS[-1]
     done = False
     for sid, call in SPACES:
         t = time.time()
@@ -156,7 +189,12 @@ for i in range(STEPS):
         print("אזהרה: לא חולץ פריים המשך (%s: %s) - ממשיכים מהקודם"
               % (type(e).__name__, str(e)[:120]), flush=True)
 
-    time.sleep(3)      # מרווח נשימה: רצף predict מהיר מחזיר 429
+    # מרווח נשימה מרועש, ולא קבוע: מרווח קבוע מסנכרן את כל הרנרים
+    # שהוצתו יחד, ושמונה קריאות שיוצאות בדיוק באותן שניות הן עומס
+    # אחד גדול על אותו מרחב - כלומר בדיוק ה-429 שהמרווח בא למנוע.
+    if i + 1 < STEPS:
+        import random
+        time.sleep(PACE * (0.75 + 0.5 * random.random()))
 
 (OUT / ("chain_%d.json" % SHARD)).write_text(
     json.dumps(dict(shard=SHARD, made=made, log=log), ensure_ascii=False,
