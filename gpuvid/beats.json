@@ -1,24 +1,27 @@
 {
  "v": 2,
  "plan": [
-  0,
-  3,
+  2,
+  2,
+  2,
   2
  ],
  "beats": [
   [
-   "cinematic 3d animated film, subtle natural motion, the character breathes and blinks, warm light, shallow depth of field",
-   "cinematic 3d animated film, the character turns the head slightly and smiles, hair moves gently, soft camera push in",
-   "cinematic 3d animated film, gentle breeze, light flickers, the character shifts weight naturally, slow camera drift"
+   "wide establishing shot of the group on the wooden porch, warm low sunset light, steam rising from the coffee cups, gentle breeze in the grass, subtle breathing and small head movements, cinematic 3d animation, static camera",
+   "wide establishing shot of the group on the wooden porch, warm low sunset light, steam rising from the coffee cups, gentle breeze in the grass, subtle breathing and small head movements, cinematic 3d animation, static camera"
   ],
   [
-   "cinematic 3d animated film, slow cinematic pull back, calm closing moment, warm golden light",
-   "cinematic 3d animated film, subtle natural motion, the character breathes and blinks, warm light, shallow depth of field",
-   "cinematic 3d animated film, the character turns the head slightly and smiles, hair moves gently, soft camera push in"
+   "close-up portrait of a young woman with red curly hair and a mustard yellow shirt, talking, mouth clearly moving, lips forming words, small natural head nods, blinking, warm sunset rim light, shallow depth of field, cinematic 3d animation, static camera",
+   "close-up portrait of a young woman with red curly hair and a mustard yellow shirt, talking, mouth clearly moving, lips forming words, small natural head nods, blinking, warm sunset rim light, shallow depth of field, cinematic 3d animation, static camera"
   ],
   [
-   "cinematic 3d animated film, gentle breeze, light flickers, the character shifts weight naturally, slow camera drift",
-   "cinematic 3d animated film, slow cinematic pull back, calm closing moment, warm golden light"
+   "close-up portrait of a man with a dark beard and an olive green jacket, talking, mouth clearly moving, lips forming words, small natural head nods, blinking, warm sunset rim light, shallow depth of field, cinematic 3d animation, static camera",
+   "close-up portrait of a man with a dark beard and an olive green jacket, talking, mouth clearly moving, lips forming words, small natural head nods, blinking, warm sunset rim light, shallow depth of field, cinematic 3d animation, static camera"
+  ],
+  [
+   "close-up portrait of a young woman with red curly hair and a mustard yellow shirt, talking, mouth clearly moving, lips forming words, small natural head nods, blinking, warm sunset rim light, shallow depth of field, cinematic 3d animation, static camera",
+   "close-up portrait of a young woman with red curly hair and a mustard yellow shirt, talking, mouth clearly moving, lips forming words, small natural head nods, blinking, warm sunset rim light, shallow depth of field, cinematic 3d animation, static camera"
   ]
  ]
 }
