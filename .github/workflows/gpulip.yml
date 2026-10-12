@@ -1,0 +1,55 @@
+name: gpu-lipsync
+
+# סנכרון שפתיים על ZeroGPU חינמי, קטע לכל רנר.
+#
+# **הנוסחה ל"בלי הגבלה", והיא אותה נוסחה של gpuvid2.yml:**
+# ארנק ZeroGPU נספר לפי כתובת IP, ולרנר של גיטהאב יש כתובת
+# Azure נקייה - כלומר ארנק מלא בכל ריצה. מאגר ציבורי מקבל דקות
+# Actions בלתי מוגבלות, ולכן מטריצה של שישה רנרים היא שישה
+# ארנקים נפרדים, בלי מכסה ובלי עלות.
+#
+# מה שהמכונה הביתית לא יכולה לעשות: 12/10 בערב כל קריאת סנכרון
+# משם חזרה "You have exceeded your ZeroGPU runs limit" - מגבלת
+# **מספר הרצות** לכתובת, לא מגבלת שניות. כאן היא לא קיימת.
+#
+# קטע אחד לרנר בכוונה: שתי קריאות LatentSync ברצף מאותה כתובת
+# שורפות את הארנק באמצע, ואז הקטע השני חוזר ריק אחרי שהראשון
+# כבר הצליח - כישלון שנראה אקראי.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'מזהה כרטיס'
+        required: false
+        default: ''
+
+jobs:
+  lip:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # av + numpy אינם קישוט: בלעדיהם אי אפשר לאמת שמה שחזר
+      # הוא וידאו אמיתי, ורנר היה מעלה קובץ שגיאה בשם mp4.
+      - run: pip -q install gradio_client av numpy
+      - name: lipsync
+        continue-on-error: true
+        env:
+          SHARD: ${{ matrix.shard }}
+          PACE: '6'
+          CALL_TIMEOUT: '600'
+        run: python gpulip/lip_job.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lip-${{ matrix.shard }}-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
