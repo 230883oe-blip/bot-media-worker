@@ -138,7 +138,18 @@ def last_frame(video, dst):
 
 clients, log, made = {}, [], []
 cur = Path("seed.png")
-shutil.copy(IMG, cur)
+
+# **פריים פתיחה לכל שוט (12/10).** עד כאן כל השרדים פתחו מאותה
+# תמונה בדיוק, ולכן ההרכב של כל שוט נקבע על ידי הסחף של מודל
+# הווידאו ולא על ידי הבימוי - נמדד: בשתי שורות הדיאלוג פני
+# הדובר תפסו 10%-13% מגובה המסך בתוך שוט קבוצתי. פקודת טקסט
+# ("close-up") אינה מתגברת על תמונת פתיחה קבוצתית; תמונת פתיחה
+# שהיא כבר תקריב - כן. `shotflow.seed_frames` כותב את הקבצים
+# האלה, ומי ששולח רק `frame.png` ממשיך לעבוד בדיוק כמקודם.
+SEED = Path("gpuvid/frame_%d.png" % SHARD)
+src = SEED if SEED.exists() else IMG
+print("פריים פתיחה: %s" % src, flush=True)
+shutil.copy(src, cur)
 
 for i in range(STEPS):
     # BEATS כבר מקונן לשוט הזה, ולכן האינדקס הוא `i` ולא
