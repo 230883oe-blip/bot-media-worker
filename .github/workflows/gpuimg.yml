@@ -1,0 +1,59 @@
+name: gpu-image-fanout
+
+# הפקת פריים מאסטר על A10G חינמי, במקביל על שמונה רנרים.
+#
+# **זו הנוסחה ל"בלי הגבלה", והיא אותה נוסחה של gpuvid2.yml:**
+# ארנק ZeroGPU נספר לפי כתובת IP, ולרנר של גיטהאב יש כתובת Azure
+# נקייה - כלומר ארנק מלא בכל ריצה. מאגר ציבורי מקבל דקות Actions
+# בלתי מוגבלות, ולכן מטריצה של שמונה רנרים היא שמונה ארנקים
+# נפרדים בכל הרצה, בלי מכסה ובלי עלות.
+#
+# מה שהמכונה הביתית **לא** יכולה לעשות: 12/10 ב-02:00 היא הגיעה
+# ל-"0s left" ומאותו רגע אף פריים לא נוצר. כאן זה לא קורה.
+#
+# כל רנר מקבל ספק אחר וזרע אחר (ראו frame_job.py), ולכן שמונה
+# רנרים הם שמונה פריימים שונים - והמפיק סופר פנים ובוחר, ולא
+# מקבל שמונה גרסאות של אותה החמצה.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'מזהה כרטיס'
+        required: false
+        default: ''
+      tries:
+        description: 'ספקים לכל רנר'
+        required: false
+        default: '3'
+
+jobs:
+  frame:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # pillow אינו קישוט: gradio_client מחזיר נתיב מקומי, אבל
+      # חלק מה-Spaces מחזירים webp, והעלאה של webp בשם png
+      # מפילה את קריאת התמונה בבית.
+      - run: pip -q install gradio_client pillow
+      - name: frame
+        continue-on-error: true
+        env:
+          SHARD: ${{ matrix.shard }}
+          PACE: '8'
+          CALL_TIMEOUT: '240'
+        run: python gpuimg/frame_job.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: img-${{ matrix.shard }}-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
