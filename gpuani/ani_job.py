@@ -123,10 +123,24 @@ def _ok(path, min_bytes=20000):
         return False
 
 
-def one(idx, img, aud, n, log):
+def candidates(only=""):
+    """המרחבים לניסיון. ``only`` מקבע **וריאנט** למרחב אחד.
+
+    בלי הקיבוע הזה אין "שני וריאנטים": ``one`` נופל למרחב הבא
+    ברשימה, ולכן שתי ריצות שנקראות בשמות שונים יכולות לרוץ על
+    אותו מרחב בדיוק ולהיות מושוות זו לזו כאילו הן שונות.
+    """
+    only = str(only or "").strip().lower()
+    if not only:
+        return list(CAND)
+    picked = [c for c in CAND if c[2] == only or only in c[0].lower()]
+    return picked or list(CAND)
+
+
+def one(idx, img, aud, n, log, cands=None):
     from gradio_client import Client, handle_file         # noqa: PLC0415
     dst = OUT / ("ani_%02d.mp4" % idx)
-    for sid, api, flavor, cap in CAND:
+    for sid, api, flavor, cap in (cands or CAND):
         t0 = time.time()
         try:
             c = deadline(lambda s=sid: Client(s, verbose=False),
@@ -154,7 +168,9 @@ def one(idx, img, aud, n, log):
 def main():
     job = json.loads((HERE / "job.json").read_text(encoding="utf-8"))
     mine = [p for p in job.get("pieces", []) if int(p.get("shard", 0)) == SHARD]
+    cands = candidates(job.get("engine", ""))
     log, made = [], []
+    print("שורה %d · מרחבים: %s" % (SHARD, [c[0] for c in cands]), flush=True)
     if not mine:
         print("שורה %d: אין קטעים - יוצא בלי לגעת ב-GPU" % SHARD, flush=True)
     for p in mine:
@@ -163,7 +179,7 @@ def main():
         if not img.exists() or not aud.exists():
             log.append({"piece": i, "ok": False, "why": "חסר קלט"})
             continue
-        got, sid = one(i, img, aud, int(p.get("frames") or 75), log)
+        got, sid = one(i, img, aud, int(p.get("frames") or 75), log, cands)
         if got:
             made.append({"piece": i, "file": got.name, "space": sid})
             print("קטע %d הונפש ב-%s" % (i, sid), flush=True)
