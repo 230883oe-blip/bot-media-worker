@@ -1,0 +1,189 @@
+name: nvidia-blender-beach
+
+# שוט החוף מחדש - NVIDIA Audio2Face-3D + Blender, **הכול על רנרים
+# מרוחקים**. אין כאן שלב אחד שרץ על המכונה הביתית.
+#
+# למה ארבע עבודות ולא אחת:
+#   a2f    - המודל של NVIDIA (ONNX, מעבד) פעם אחת. 725MB הורדה;
+#            להריץ אותו שוב בכל רנר של המטריצה זה 12 הורדות.
+#   smoke  - פריים אחד ב-320×180 לפני שהמטריצה נדלקת. סקריפט
+#            בלנדר שבור מתגלה אחרי 3 דקות ולא אחרי 12 ריצות.
+#   render - 12 רנרים, כל אחד 10 פריימים. Cycles על מעבד הוא
+#            איטי; פיצול הוא מה שהופך אותו לאפשרי. מאגר ציבורי
+#            מקבל דקות Actions בלתי מוגבלות, ולכן 12 מכונות
+#            אינן יקרות יותר מאחת.
+#   mux    - הקידוד והשמע גם הם בענן. אם ה-mp4 היה נבנה בבית,
+#            הקובץ המסופק היה נולד מקומית - וזה בדיוק מה שאסור.
+#
+# מלכודות שנסגרו כאן מראש:
+#   * בלנדר מופץ בלי תלויות X. בלי ``apt install`` של שבע
+#     ספריות הוא נופל ב-``libXi.so.6`` גם ב-``--background``.
+#   * ``actions/cache`` על הטארבול: 300MB × 13 עבודות הן 4GB
+#     הורדה בכל ריצה. המטמון חותך את זה לאפס מהריצה השנייה.
+#   * ``download-artifact`` עם ``pattern`` דורש ``merge-multiple``,
+#     אחרת כל רנר נוחת בתיקייה משלו והמונה של ffmpeg נשבר.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'מזהה כרטיס'
+        required: false
+        default: ''
+      samples:
+        description: 'דגימות Cycles לפריים'
+        required: false
+        default: '28'
+      width:
+        required: false
+        default: '960'
+      height:
+        required: false
+        default: '540'
+
+env:
+  BL: '4.2.9'
+  BLDIR: blender-4.2.9-linux-x64
+  TOTAL: '120'
+  PER: '10'
+
+jobs:
+  a2f:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install onnxruntime numpy
+      - name: NVIDIA Audio2Face-3D על מעבד
+        env:
+          SECONDS: '5.0'
+        run: python nvb/a2f_job.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arkit-${{ inputs.ticket }}
+          path: artifacts/arkit.json
+
+  smoke:
+    needs: a2f
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: arkit-${{ inputs.ticket }}
+          path: inbox
+      - name: תלויות בלנדר
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxrender1 libxxf86vm1 \
+            libxfixes3 libgl1 libsm6 libxkbcommon0 xz-utils
+      - uses: actions/cache@v4
+        with:
+          path: blender.tar.xz
+          key: blender-${{ env.BL }}-linux
+      - name: בלנדר
+        run: |
+          test -f blender.tar.xz || curl -fL --max-time 600 -o blender.tar.xz \
+            "https://download.blender.org/release/Blender4.2/blender-${BL}-linux-x64.tar.xz"
+          tar xf blender.tar.xz
+          ./${BLDIR}/blender --version
+      - name: פריים מבחן
+        run: |
+          gunzip -kf nvb/assets/nava.glb.gz
+          ./${BLDIR}/blender -b --factory-startup -P nvb/beach_blender.py -- \
+            --glb nvb/assets/nava.glb --arkit inbox/arkit.json \
+            --out artifacts/smoke --start 1 --end 1 --total ${TOTAL} \
+            --samples 8 --width 320 --height 180
+          ls -l artifacts/smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  render:
+    needs: smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: arkit-${{ inputs.ticket }}
+          path: inbox
+      - name: תלויות בלנדר
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxrender1 libxxf86vm1 \
+            libxfixes3 libgl1 libsm6 libxkbcommon0 xz-utils
+      - uses: actions/cache@v4
+        with:
+          path: blender.tar.xz
+          key: blender-${{ env.BL }}-linux
+      - name: בלנדר
+        run: |
+          test -f blender.tar.xz || curl -fL --max-time 600 -o blender.tar.xz \
+            "https://download.blender.org/release/Blender4.2/blender-${BL}-linux-x64.tar.xz"
+          tar xf blender.tar.xz
+      - name: רנדר מקטע
+        run: |
+          gunzip -kf nvb/assets/nava.glb.gz
+          S=$(( (${{ matrix.shard }} - 1) * PER + 1 ))
+          E=$(( S + PER - 1 ))
+          [ $E -gt $TOTAL ] && E=$TOTAL
+          echo "מקטע ${{ matrix.shard }}: פריימים $S..$E"
+          ./${BLDIR}/blender -b --factory-startup -P nvb/beach_blender.py -- \
+            --glb nvb/assets/nava.glb --arkit inbox/arkit.json \
+            --out artifacts/frames --start $S --end $E --total ${TOTAL} \
+            --samples ${{ inputs.samples }} \
+            --width ${{ inputs.width }} --height ${{ inputs.height }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frames-${{ matrix.shard }}-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  mux:
+    needs: render
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frames-*
+          merge-multiple: true
+          path: inbox
+      - name: קידוד בענן
+        run: |
+          mkdir -p artifacts
+          ls inbox/frames | head -5
+          N=$(ls inbox/frames/*.png | wc -l)
+          echo "פריימים שהגיעו: $N מתוך ${TOTAL}"
+          echo "{\"frames_arrived\": $N, \"frames_expected\": ${TOTAL}}" \
+            > artifacts/mux.json
+          test "$N" -ge 1
+          ffmpeg -y -framerate 24 -start_number 1 \
+            -i inbox/frames/f%04d.png -i nvb/voice.wav \
+            -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p \
+            -c:a aac -b:a 128k -shortest \
+            artifacts/beach_nvb.mp4
+          cp inbox/blender_meta.json artifacts/ 2>/dev/null || true
+          ls -l artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beach-nvb-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
