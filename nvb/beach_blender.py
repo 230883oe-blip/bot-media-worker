@@ -221,8 +221,10 @@ def water_material():
     bump = nt.nodes.new("ShaderNodeBump")
     bump.inputs["Strength"].default_value = 0.22
     bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.inputs["Base Color"].default_value = (0.06, 0.26, 0.31, 1)
-    bsdf.inputs["Roughness"].default_value = 0.09
+    # חספוס 0.09 החזיר מראה לבן: בזווית שטוחה פנל חלק מחזיר את
+    # כיפת השמיים הבהירה (פרנל), והים נקרא כשלג. 0.3 מפזר.
+    bsdf.inputs["Base Color"].default_value = (0.02, 0.13, 0.17, 1)
+    bsdf.inputs["Roughness"].default_value = 0.30
     out = nt.nodes.new("ShaderNodeOutputMaterial")
     nt.links.new(co.outputs["Object"], nz.inputs["Vector"])
     nt.links.new(nz.outputs["Fac"], bump.inputs["Height"])
@@ -427,18 +429,42 @@ def recolor(meshes, skin, hair, eye_dark: bool = False):
         if not p:
             continue
         nm = m.name
+
+        def tint(rgb):
+            """צובע גם כשיש טקסטורה.
+
+            **זו הסיבה ששתי הדמויות יצאו זהות בפריים המבחן.**
+            כש-``Base Color`` מקושר לטקסטורה, ``default_value``
+            פשוט מתעלם - בלי שגיאה ובלי אזהרה. לכן כאן: אם יש
+            קישור, נכנס צומת כפל בין הטקסטורה ל-BSDF ושומר על
+            המרקם; אם אין, צביעה ישירה.
+            """
+            sock = p.inputs["Base Color"]
+            if not sock.is_linked:
+                sock.default_value = (*rgb, 1)
+                return "direct"
+            src = sock.links[0].from_socket
+            nt = m.node_tree
+            mx = nt.nodes.new("ShaderNodeMix")
+            mx.data_type = "RGBA"
+            mx.blend_type = "MULTIPLY"
+            mx.inputs["Factor"].default_value = 1.0
+            nt.links.new(src, mx.inputs[6])
+            mx.inputs[7].default_value = (*rgb, 1)
+            nt.links.new(mx.outputs[2], sock)
+            return "mix"
+
         if nm.startswith("skin"):
-            p.inputs["Base Color"].default_value = (*skin, 1)
+            tint(skin)
             p.inputs["Roughness"].default_value = 0.42
             if "Subsurface Weight" in p.inputs:
                 p.inputs["Subsurface Weight"].default_value = 0.14
                 p.inputs["Subsurface Radius"].default_value = (0.9, 0.3, 0.2)
         elif nm.startswith("hair"):
-            p.inputs["Base Color"].default_value = (*hair, 1)
+            tint(hair)
             p.inputs["Roughness"].default_value = 0.34
         elif nm.startswith("eye"):
-            p.inputs["Base Color"].default_value = (
-                (0.08, 0.05, 0.04, 1) if eye_dark else (0.16, 0.26, 0.30, 1))
+            tint((0.08, 0.05, 0.04) if eye_dark else (0.16, 0.26, 0.30))
             p.inputs["Roughness"].default_value = 0.08
         got.append(m.name)
     return got
@@ -664,13 +690,18 @@ def main() -> int:
 
     build_world()
 
-    sand = plane("sand", 90.0, (0.0, 6.0, 0.0))
+    # **פריסה, לא קישוט.** בגרסה הראשונה החול נפרש עד y=51 והמים
+    # התחילו אחריו, כך שהפריים נקרא כמישור מלח ולא כחוף: הדמויות
+    # עמדו על חול, ומאחוריהן עוד 50 מטר חול. כאן החול נגמר
+    # 3.5 מטר מאחורי הדמויות, המים מתחילים שם, וקו הקצף יושב
+    # על כפות הרגליים - בדיוק "גלים רדודים סביב הרגליים".
+    sand = plane("sand", 100.0, (0.0, -46.5, 0.0))
     sand.data.materials.append(sand_material())
     wmat, waves = water_material()
-    water = plane("water", 240.0, (0.0, 62.0, -0.03))
+    water = plane("water", 400.0, (0.0, 100.0, -0.02))
     water.data.materials.append(wmat)
     fmat, foam = foam_material()
-    wet = plane("foam", 26.0, (0.0, 2.4, 0.012))
+    wet = plane("foam", 30.0, (0.0, 0.6, 0.015))
     wet.data.materials.append(fmat)
 
     glb = Path(a.glb)
@@ -679,12 +710,12 @@ def main() -> int:
     # נטען על סמך שני קבצים שונים.
     specs = [
         {"tag": "noa", "x": -0.46, "y": 0.0, "scale": 1.00,
-         "skin": (0.78, 0.60, 0.48), "hair": (0.86, 0.72, 0.38),
+         "skin": (0.92, 0.74, 0.60), "hair": (0.95, 0.80, 0.42),
          "eye_dark": False, "speaks": True,
          "ident": {"cheek_hollow_L": 0.18, "cheek_hollow_R": 0.18,
                    "lip_up_raise_L": 0.07, "lip_up_raise_R": 0.07}},
         {"tag": "tal", "x": 0.50, "y": 0.26, "scale": 0.945,
-         "skin": (0.55, 0.39, 0.29), "hair": (0.10, 0.07, 0.06),
+         "skin": (0.38, 0.24, 0.16), "hair": (0.07, 0.05, 0.04),
          "eye_dark": True, "speaks": False,
          "ident": {"cheek_raise_L": 0.13, "cheek_raise_R": 0.13,
                    "nose_flare": 0.16, "mouth_shift_L": 0.05}},
