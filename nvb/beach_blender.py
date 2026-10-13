@@ -495,8 +495,13 @@ def apply_frame(cast, arkit, frame: int, total: int, waves, foam):
                     val += b["smile"] * (0.55 if not speaks else 0.30)
                 kb.key_blocks[mo].value = max(0.0, min(1.0, val))
 
-        # --- לסת: ``jawOpen`` אינו בלנדשייפ בנכס, אלא עצם
-        jo = float(w[nmi["jawOpen"]]) if (speaks and "jawOpen" in nmi) else 0.0
+        # --- לסת: עצם, ולא בלנדשייפ (לנכס אין ``jaw_open``).
+        # האות הוא ``jaw_open`` מעבודת ה-A2F - מרווח השפתיים
+        # המנורמל - ולא משקל ``jawOpen``. ההסבר ב-``a2f_job.py``:
+        # בלוק הלסת של A2F נפרד ממשקלי העור, ולכן המשקל מחזיר
+        # 0.25 גם על פה פעור. עם המשקל הלסת זזה 4 מעלות בלבד.
+        jaw = arkit.get("jaw_open") or []
+        jo = float(jaw[min(wi, len(jaw) - 1)]) if (speaks and jaw) else 0.0
         set_rot(arm, "jaw", x=jo * JAW_DEG)
 
         # --- נשימה: חזה + בית חזה, אמפליטודה קטנה בכוונה
