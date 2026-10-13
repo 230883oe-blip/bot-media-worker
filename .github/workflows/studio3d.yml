@@ -108,6 +108,10 @@ jobs:
           ls -l artifacts/smoke
           test -s artifacts/smoke/f0001.png
           test -s artifacts/smoke/f0062.png
+          # זיכרון פנוי אחרי הרינדור. הריצה 38464421809 נהרגה
+          # ב-exit 137 (OOM) אחרי שכל הסצנה נבנתה בהצלחה, וללא
+          # המספר הזה זה נראה כמו תקלת רינדור ולא כמו מחנק.
+          free -m | tee -a artifacts/mem.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
