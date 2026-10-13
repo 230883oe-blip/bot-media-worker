@@ -148,15 +148,19 @@ def build_world(sun_elev_deg: float = 42.0):
     sky.altitude = 0.0
     sky.air_density = 1.0
     sky.dust_density = 0.6
+    # **דיסק השמש כבוי בכוונה.** יש כאן גם מנורת SUN נפרדת,
+    # ושני מקורות ישירים הם פי שניים אור - בפריים המבחן הראשון
+    # (13/10 17:30) החול והשמיים יצאו לבנים לגמרי.
+    sky.sun_disc = False
     bg = nt.nodes.new("ShaderNodeBackground")
-    bg.inputs["Strength"].default_value = 0.9
+    bg.inputs["Strength"].default_value = 0.45
     out = nt.nodes.new("ShaderNodeOutputWorld")
     nt.links.new(sky.outputs[0], bg.inputs[0])
     nt.links.new(bg.outputs[0], out.inputs[0])
 
     sun = bpy.data.objects.new("sun", bpy.data.lights.new("sun", "SUN"))
     bpy.context.collection.objects.link(sun)
-    sun.data.energy = 4.0
+    sun.data.energy = 2.2
     sun.data.angle = math.radians(2.0)
     sun.rotation_euler = (math.radians(90 - sun_elev_deg),
                           0.0, math.radians(150.0))
@@ -327,49 +331,82 @@ def set_rot(arm, name: str, x=0.0, y=0.0, z=0.0):
     return True
 
 
-def pose_arms(arm, meshes) -> dict:
-    """מוריד את הידיים - **במדידה ולא בניחוש**.
+def _hand_z(arm, side: str) -> float:
+    """גובה כף היד במרחב העולם. מדד ישיר של "הידיים למטה"."""
+    pb = bone(arm, "hand_" + side)
+    if not pb:
+        pb = bone(arm, "forearm_" + side)
+    return float((arm.matrix_world @ pb.head).z) if pb else 1e9
 
-    הנכס מיוצא בפוזת A/T (מפתח ידיים 1.78 מ' על ציר X). כיוון
-    הסיבוב שמוריד זרוע תלוי בכיוון העצם ב-glTF ואינו ידוע מראש,
-    לכן כאן נמדדות שש אפשרויות (3 צירים × 2 סימנים) ונבחרת זו
-    שמצמצמת את המפתח. בלי זה היה 50% סיכוי לזרועות שמצביעות
-    למעלה - תקלה שעוברת קומפילציה בשקט.
+
+def pose_arms(arm, meshes) -> dict:
+    """מוריד את הידיים - **במדד ישיר ולא בניחוש**.
+
+    הנכס מיוצא בפוזת T (מפתח 2.29 מ'). כיוון הסיבוב שמוריד זרוע
+    תלוי בכיוון שבו ה-glTF ייצא את העצם ואינו ידוע מראש.
+
+    **הגרסה הראשונה כאן נכשלה בשקט (13/10 17:30).** היא ניסתה
+    זווית אחת (62°) בשלושה צירים ומדדה "מפתח תיבת החסימה".
+    הציר הנכון לא היה בין שלושת המועמדים בזווית הזו, ולכן
+    נבחר הסיבוב ה"פחות גרוע" - והידיים נשארו פרושות. המדידה
+    אמרה "שופר מ-2.293 ל-1.902" ולכן זה עבר כהצלחה. זו בדיוק
+    המלכודת: מדד שמשתפר אינו מדד שהגיע ליעד.
+
+    כאן המדד הוא **גובה כף היד**, שהוא מה שבאמת רוצים, והחיפוש
+    הוא על שלושה צירים × שמונה זוויות לכל זרוע בנפרד. בסוף יש
+    **שער**: אם כף היד לא ירדה לפחות 25 ס"מ - נפילה, לא "שופר".
     """
-    base_lo, base_hi = world_bbox(meshes)
-    base_w = base_hi.x - base_lo.x
-    best = (base_w, None, None)
-    for ax in range(3):
-        for sg in (1.0, -1.0):
-            for nm in ("upperarm_L", "upperarm_R"):
-                v = [0.0, 0.0, 0.0]
-                s = sg if nm.endswith("_L") else -sg
-                v[ax] = 62.0 * s
-                set_rot(arm, nm, *v)
-            bpy.context.view_layer.update()
-            lo, hi = world_bbox(meshes)
-            w = hi.x - lo.x
-            if w < best[0]:
-                best = (w, ax, sg)
-    for nm in ("upperarm_L", "upperarm_R"):
+    res = {"arms_posed": False}
+    angles = (-110.0, -90.0, -70.0, -50.0, 50.0, 70.0, 90.0, 110.0)
+    for side in ("L", "R"):
+        nm = "upperarm_" + side
+        if not bone(arm, nm):
+            continue
         set_rot(arm, nm, 0, 0, 0)
-    if best[1] is None:
-        log("  ! הורדת ידיים לא שיפרה דבר - נשאר בפוזת הייצוא")
-        return {"arms_posed": False, "span_before": round(base_w, 3)}
-    ax, sg = best[1], best[2]
-    for nm, ang in (("upperarm_L", 62.0), ("upperarm_R", 62.0),
-                    ("forearm_L", 16.0), ("forearm_R", 16.0)):
+        bpy.context.view_layer.update()
+        z0 = _hand_z(arm, side)
+        best = (z0, None, None)
+        for ax in range(3):
+            for ang in angles:
+                v = [0.0, 0.0, 0.0]
+                v[ax] = ang
+                set_rot(arm, nm, *v)
+                bpy.context.view_layer.update()
+                z = _hand_z(arm, side)
+                if z < best[0]:
+                    best = (z, ax, ang)
+        if best[1] is None:
+            set_rot(arm, nm, 0, 0, 0)
+            res["hand_%s" % side] = {"rest_z": round(z0, 3), "found": False}
+            continue
+        ax, ang = best[1], best[2]
         v = [0.0, 0.0, 0.0]
-        s = sg if nm.endswith("_L") else -sg
-        v[ax] = ang * s
+        v[ax] = ang
         set_rot(arm, nm, *v)
+        # המרפק ממשיך את אותו ציר, רבע מהזווית - יד רפויה לצד הגוף.
+        fa = bone(arm, "forearm_" + side)
+        if fa:
+            v2 = [0.0, 0.0, 0.0]
+            v2[ax] = ang * 0.22
+            set_rot(arm, "forearm_" + side, *v2)
+        bpy.context.view_layer.update()
+        res["hand_%s" % side] = {"rest_z": round(z0, 3),
+                                 "posed_z": round(_hand_z(arm, side), 3),
+                                 "axis": ax, "deg": ang, "found": True}
     bpy.context.view_layer.update()
     lo, hi = world_bbox(meshes)
-    log("  ידיים: מפתח %.2f -> %.2f מ' (ציר %d, סימן %+.0f)"
-        % (base_w, hi.x - lo.x, ax, sg))
-    return {"arms_posed": True, "axis": ax, "sign": sg,
-            "span_before": round(base_w, 3),
-            "span_after": round(float(hi.x - lo.x), 3)}
+    res["span_after"] = round(float(hi.x - lo.x), 3)
+    drops = [v["rest_z"] - v["posed_z"] for k, v in res.items()
+             if k.startswith("hand_") and v.get("found")]
+    res["hand_drop_m"] = round(min(drops), 3) if drops else 0.0
+    res["arms_posed"] = bool(drops) and min(drops) >= 0.25
+    log("  ידיים: ירידת כף יד %.2f מ' · מפתח %.2f מ' · %s"
+        % (res["hand_drop_m"], res["span_after"],
+           "תקין" if res["arms_posed"] else "נכשל"))
+    if not res["arms_posed"]:
+        raise SystemExit("הידיים לא ירדו (%.2f מ') - פוזת T אינה "
+                         "שוט חוף" % res["hand_drop_m"])
+    return res
 
 
 def recolor(meshes, skin, hair, eye_dark: bool = False):
@@ -608,9 +645,11 @@ def main() -> int:
     sc.cycles.caustics_refractive = False
     sc.render.film_transparent = False
     sc.render.image_settings.file_format = "PNG"
-    sc.view_settings.view_transform = "Filmic"
-    sc.view_settings.look = "None"
-    sc.view_settings.exposure = 0.25
+    # AgX ולא Filmic: Filmic עם שמי Nishita החזיר פריים שרוף
+    # לגמרי. AgX מגלגל את ההיילייטס במקום להצמיד אותם ללבן.
+    sc.view_settings.view_transform = "AgX"
+    sc.view_settings.look = "AgX - Medium Contrast"
+    sc.view_settings.exposure = -0.35
 
     build_world()
 
@@ -652,6 +691,10 @@ def main() -> int:
         nm = identity_morphs(meshes, s["ident"])
         sk = sum(len(m.data.shape_keys.key_blocks) for m in meshes
                  if m.data.shape_keys)
+        for m in meshes:
+            if len(m.data.vertices) <= 1000:
+                m.hide_render = True
+                log("    רשת עזר הוסתרה מהרנדר: %s" % m.name)
         cast.append({"arm": arm, "meshes": meshes, "x": s["x"], "y": s["y"],
                      "speaks": s["speaks"], "ident": s["ident"]})
         info.append({"tag": s["tag"], "scale": s["scale"], "arms": pa,
@@ -662,8 +705,13 @@ def main() -> int:
             % (s["tag"], len(meshes), sk, nm, mats))
 
     apply_frame(cast, arkit, 1, a.total, waves, foam)
-    camf = fit_camera([m for c in cast for m in c["meshes"]],
-                      res=(a.width, a.height))
+    # **רק רשתות הדמות.** ב-GLB מסתתר ``Icosphere`` של 42
+    # קודקודים (עזר שנשאר מהבנייה), והוא ניפח את תיבת החסימה
+    # מ-1.8 מ' ל-2.78 מ' - כלומר הדמויות יצאו קטנות ב-35%
+    # בקאדר בלי ששום שלב התלונן.
+    body = [m for c in cast for m in c["meshes"]
+            if len(m.data.vertices) > 1000]
+    camf = fit_camera(body, res=(a.width, a.height))
 
     outdir = Path(a.out)
     outdir.mkdir(parents=True, exist_ok=True)
