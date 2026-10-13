@@ -176,6 +176,10 @@ jobs:
         with:
           name: arkit-${{ inputs.ticket }}
           path: inbox
+      # ``ffmpeg`` **אינו** מותקן מראש ב-ubuntu-latest (נמדד
+      # 13/10: exit 127 אחרי ש-120/120 פריימים כבר רונדרו).
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: קידוד בענן
         run: |
           mkdir -p artifacts
