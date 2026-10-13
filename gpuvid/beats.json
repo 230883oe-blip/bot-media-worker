@@ -1,11 +1,12 @@
 {
  "v": 2,
  "plan": [
-  1
+  2
  ],
  "beats": [
   [
-   "cinematic 3d animated film, subtle natural motion, the character breathes and blinks, warm light, shallow depth of field"
+   "cinematic 3d animated film, subtle natural motion, the character breathes and blinks, warm light, shallow depth of field",
+   "cinematic 3d animated film, the character turns the head slightly and smiles, hair moves gently, soft camera push in"
   ]
  ]
 }
