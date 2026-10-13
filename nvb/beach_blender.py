@@ -306,6 +306,13 @@ def import_char(glb: Path, tag: str):
     if not any(it.get("shape_keys") for it in inv):
         raise SystemExit("אף רשת לא קיבלה בלנדשייפים - הפלט של A2F "
                          "לא היה מחובר לשום דבר")
+    # **הצללה חלקה.** הרנדר הקודם נמדד עם מקצועות פוליגון חשופים
+    # פי 132 מהשוט המקורי. הרשת מגיעה ממודל גנרטיבי, ונורמלי
+    # המשטח שבה מוגדרים לפי פאה ולא לפי קודקוד; בלי ההחלקה כאן
+    # כל פאה מחזירה אור בנפרד, וזה המראה ה"מפוסל" שנקרא פלסטיק.
+    for o in meshes:
+        for poly in o.data.polygons:
+            poly.use_smooth = True
     for o in new:
         o.name = "%s_%s" % (tag, o.name)
         if o.parent is None:
@@ -454,14 +461,24 @@ def recolor(meshes, skin, hair, eye_dark: bool = False):
             nt.links.new(mx.outputs[2], sock)
             return "mix"
 
+        # **הגוון מנורמל סביב לבן כשיש טקסטורה.** הענף של
+        # ``tint`` מכפיל, ולכן גוון כהה היה מחשיך את האלבדו
+        # האמיתי ומחזיר בדיוק את המראה הדהוי שרצינו לתקן.
+        # ההבדל בין שתי הדמויות נשמר - אבל כהטיה, לא כצביעה.
+        def norm(rgb):
+            if not p.inputs["Base Color"].is_linked:
+                return rgb
+            m_ = max(rgb) or 1.0
+            return tuple(0.80 + 0.20 * (c / m_) for c in rgb)
+
         if nm.startswith("skin"):
-            tint(skin)
+            tint(norm(skin))
             p.inputs["Roughness"].default_value = 0.42
             if "Subsurface Weight" in p.inputs:
                 p.inputs["Subsurface Weight"].default_value = 0.14
                 p.inputs["Subsurface Radius"].default_value = (0.9, 0.3, 0.2)
         elif nm.startswith("hair"):
-            tint(hair)
+            tint(norm(hair))
             p.inputs["Roughness"].default_value = 0.34
         elif nm.startswith("eye"):
             tint((0.08, 0.05, 0.04) if eye_dark else (0.16, 0.26, 0.30))
