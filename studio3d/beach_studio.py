@@ -416,6 +416,31 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30)):
     nt.links.new(vo.outputs["Distance"], bp.inputs["Height"])
     nt.links.new(bp.outputs["Normal"], bsdf.inputs["Normal"])
 
+    # --- הצללת חריצים (cavity) לפי ``Pointiness`` של הגאומטריה.
+    # זה התיקון לראש שנראה כגוש בפריים המבחן. הפנים **קיימות**
+    # ברשת של Blender Studio - ארובות עיניים, קו לסת, קפלי
+    # שפתיים - אבל בעור אחיד בלי צל מקומי אי אפשר לקרוא אותן.
+    # ``Pointiness`` מחזיר קעירות מול קמירות לכל קודקוד, ולכן
+    # הוא מכהה בדיוק את מה שחרוט ומבהיר את מה שבולט. הוא אינו
+    # מצייר תווי פנים שאינם שם - הוא רק מפסיק להסתיר אותם.
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    geo.location = (-980, -660)
+    cav = nt.nodes.new("ShaderNodeValToRGB")
+    cav.location = (-700, -660)
+    cav.color_ramp.elements[0].position = 0.42
+    cav.color_ramp.elements[0].color = (0.30, 0.22, 0.20, 1.0)
+    cav.color_ramp.elements[1].position = 0.56
+    cav.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+    if "Pointiness" in geo.outputs:
+        nt.links.new(geo.outputs["Pointiness"], cav.inputs["Fac"])
+        mul = nt.nodes.new("ShaderNodeMixRGB")
+        mul.location = (-60, 60)
+        mul.blend_type = "MULTIPLY"
+        mul.inputs["Fac"].default_value = 0.85
+        nt.links.new(mx.outputs["Color"], mul.inputs["Color1"])
+        nt.links.new(cav.outputs["Color"], mul.inputs["Color2"])
+        nt.links.new(mul.outputs["Color"], bsdf.inputs["Base Color"])
+
     rg = nt.nodes.new("ShaderNodeTexNoise")
     rg.location = (-700, -520)
     rg.inputs["Scale"].default_value = 22.0
@@ -451,8 +476,14 @@ def hair_material(name: str, col):
     nt, out = _nodes(mat)
     h = nt.nodes.new("ShaderNodeBsdfHairPrincipled")
     h.location = (300, 0)
-    for k, v in (("Color", (*col, 1.0)), ("Roughness", 0.28),
-                 ("Radial Roughness", 0.42)):
+    # **``parametrization`` חייב להיות COLOR.** ברירת המחדל היא
+    # MELANIN, ואז הקלט ``Color`` קיים אבל **מתעלמים ממנו** -
+    # וזה בדיוק מה שנמדד בפריים המבחן: שיער לבנבן בשתי הדמויות
+    # למרות שהוגדרו חום וכמעט-שחור. הצבה שאינה נופלת ואינה
+    # עובדת היא הסוג הגרוע, כי היא לא מופיעה בשום לוג.
+    _set(h, parametrization="COLOR")
+    for k, v in (("Color", (*col, 1.0)), ("Roughness", 0.26),
+                 ("Radial Roughness", 0.38), ("Coat", 0.12)):
         if k in h.inputs:
             h.inputs[k].default_value = v
     # וריאציית גוון בין גדיל לגדיל: בלי זה השיער קורא כגוש אחד
@@ -474,6 +505,46 @@ def hair_material(name: str, col):
         if "Color" in h.inputs:
             nt.links.new(hv.outputs["Color"], h.inputs["Color"])
     nt.links.new(h.outputs[0], out.inputs["Surface"])
+    return mat
+
+
+def eye_material(name: str, fdir: float, iris=(0.19, 0.31, 0.37)):
+    """גלגל עין: לובן + קשתית + אישון, לפי **הנורמל** ולא לפי UV.
+
+    לחבילת הפיסול אין UV לעיניים ואין חומרים, ולכן בפריים המבחן
+    הן רונדרו כגוש אפור בתוך הארובה - ומכאן חלק מהתחושה שלראש
+    אין פנים. הנורמל של ספֵרה מצביע תמיד החוצה מהמרכז, ולכן
+    רכיב ה-Y שלו הוא בדיוק "כמה הנקודה הזאת פונה קדימה": 1
+    במרכז הקשתית ו-0 בצדדים. זה נותן עין נכונה בלי שום מפה.
+    """
+    mat = bpy.data.materials.new(name)
+    nt, out = _nodes(mat)
+    b = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    b.location = (300, 0)
+    b.inputs["Roughness"].default_value = 0.10
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    geo.location = (-900, 0)
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    sep.location = (-700, 0)
+    nt.links.new(geo.outputs["Normal"], sep.inputs["Vector"])
+    fwd = nt.nodes.new("ShaderNodeMath")
+    fwd.location = (-520, 0)
+    fwd.operation = "MULTIPLY"
+    fwd.inputs[1].default_value = fdir
+    nt.links.new(sep.outputs["Y"], fwd.inputs[0])
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-330, 0)
+    cr = ramp.color_ramp
+    cr.interpolation = "CONSTANT"
+    cr.elements[0].position = 0.0
+    cr.elements[0].color = (0.74, 0.72, 0.70, 1.0)        # לובן
+    cr.elements[1].position = 0.82
+    cr.elements[1].color = (*iris, 1.0)                   # קשתית
+    e3 = cr.elements.new(0.965)
+    e3.color = (0.012, 0.010, 0.010, 1.0)                 # אישון
+    nt.links.new(fwd.outputs["Value"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], b.inputs["Base Color"])
+    nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat
 
 
@@ -551,16 +622,22 @@ def add_hair(body, length: float, col, count=3200, children=8):
     ps = body.particle_systems[-1]
     ps.vertex_group_density = "scalp"
     s = ps.settings
-    _set(s, type="HAIR", count=count, hair_length=length, hair_step=6,
+    # **``clump_factor`` גבוה הוא מה שהופך קיפוד לתספורת.** בלי
+    # סימולציית כבידה הגדיל צומח לפי נורמל הקרקפת, כלומר רדיאלית
+    # החוצה - וזה מה שנמדד בפריים המבחן: הילה פרועה סביב הראש.
+    # ``clump`` מושך כל בן אל קצה האם שלו, ולכן ערך 0.93 אוסף
+    # את הגדילים לגוש צמוד שקורא כשיער. אורך קצר (7-9 ס"מ)
+    # מקטין את המנוף של אותה בעיה בדיוק.
+    _set(s, type="HAIR", count=count, hair_length=length, hair_step=5,
          use_hair_bspline=True, child_type="INTERPOLATED",
          rendered_child_count=children, child_percent=max(2, children // 2),
-         child_length=0.95, child_radius=0.030,
-         clump_factor=0.62, clump_shape=0.22,
-         roughness_1=0.012, roughness_1_size=0.06,
-         roughness_2=0.022, roughness_2_size=0.22,
-         roughness_endpoint=0.010,
-         kink="CURL", kink_amplitude=0.012, kink_frequency=2.1,
-         kink_shape=0.25,
+         child_length=0.92, child_radius=0.016,
+         clump_factor=0.93, clump_shape=0.52,
+         roughness_1=0.006, roughness_1_size=0.04,
+         roughness_2=0.010, roughness_2_size=0.14,
+         roughness_endpoint=0.004,
+         kink="CURL", kink_amplitude=0.006, kink_frequency=3.0,
+         kink_shape=0.15,
          root_radius=0.008, tip_radius=0.001, radius_scale=0.010,
          use_close_tip=True)
     # חומר השיער הוא הסלוט השני של הגוף.
@@ -663,7 +740,7 @@ def world_hdri(hdri: Path, rot_deg: float = 118.0, strength: float = 1.0):
     log("HDRI: %s (סיבוב %.0f°)" % (hdri.name, rot_deg))
 
 
-def add_sun(elev=38.0, azim=132.0, energy=3.6, angle_deg=0.90):
+def add_sun(elev=38.0, azim=132.0, energy=2.1, angle_deg=0.90):
     """שמש חדה **לצד** ה-HDRI.
 
     ה-HDRI לבדו נותן אור רך; רך הוא בדיוק מה שהפיל את
@@ -722,9 +799,11 @@ def water_material():
     nt, out = _nodes(mat)
     b = nt.nodes.new("ShaderNodeBsdfPrincipled")
     b.location = (300, 0)
-    b.inputs["Base Color"].default_value = (0.055, 0.195, 0.235, 1)
-    b.inputs["Roughness"].default_value = 0.055
-    for k, v in (("Transmission Weight", 0.42), ("Transmission", 0.42)):
+    b.inputs["Base Color"].default_value = (0.040, 0.160, 0.205, 1)
+    # 0.055 החזיר מראה שהשתקף כלבן שרוף בפריים המבחן. 0.13 עדיין
+    # קורא כמים אבל מפזר את ההיילייט במקום להצמיד אותו.
+    b.inputs["Roughness"].default_value = 0.13
+    for k, v in (("Transmission Weight", 0.22), ("Transmission", 0.22)):
         if k in b.inputs:
             b.inputs[k].default_value = v
             break
@@ -763,11 +842,46 @@ def foam_material():
     r.color_ramp.elements[0].position = 0.48
     r.color_ramp.elements[1].position = 0.63
     nt.links.new(n.outputs["Fac"], r.inputs["Fac"])
+    # --- **הקצף הוא רצועה, לא שטיח.** בפריים המבחן מישור הקצף
+    # (34 יחידות) כיסה את כל חזית הפריים בלבן, והחול נעלם
+    # לגמרי. ההגבלה היא לפי ציר Y בקואורדינטות אובייקט: קצף
+    # קיים רק בין קו המים לכמטר לפניו, ודועך לשני הכיוונים -
+    # בדיוק כמו גל שנשבר.
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-980, -200)
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    sep.location = (-760, -200)
+    nt.links.new(tc.outputs["Object"], sep.inputs["Vector"])
+    near = nt.nodes.new("ShaderNodeMapRange")
+    near.location = (-560, -140)
+    # הערכים הם קואורדינטות **אובייקט** במטרים, כלומר ביחס
+    # למרכז המישור (``primitive_plane_add(size=30)`` נותן ‎±15).
+    # ``Generated`` היה נותן 0..1 ומחייב כיול מחדש בכל שינוי
+    # גודל; Object נשאר נכון.
+    near.inputs["From Min"].default_value = -1.10
+    near.inputs["From Max"].default_value = -0.35
+    far = nt.nodes.new("ShaderNodeMapRange")
+    far.location = (-560, -330)
+    far.inputs["From Min"].default_value = 1.90
+    far.inputs["From Max"].default_value = 0.90
+    nt.links.new(sep.outputs["Y"], near.inputs["Value"])
+    nt.links.new(sep.outputs["Y"], far.inputs["Value"])
+    band = nt.nodes.new("ShaderNodeMath")
+    band.location = (-370, -230)
+    band.operation = "MULTIPLY"
+    nt.links.new(near.outputs["Result"], band.inputs[0])
+    nt.links.new(far.outputs["Result"], band.inputs[1])
+    gate = nt.nodes.new("ShaderNodeMath")
+    gate.location = (-200, -100)
+    gate.operation = "MULTIPLY"
+    nt.links.new(r.outputs["Color"], gate.inputs[0])
+    nt.links.new(band.outputs["Value"], gate.inputs[1])
+
     tr = nt.nodes.new("ShaderNodeBsdfTransparent")
     tr.location = (300, -220)
     mix = nt.nodes.new("ShaderNodeMixShader")
     mix.location = (470, 0)
-    nt.links.new(r.outputs["Color"], mix.inputs["Fac"])
+    nt.links.new(gate.outputs["Value"], mix.inputs["Fac"])
     nt.links.new(tr.outputs["BSDF"], mix.inputs[1])
     nt.links.new(b.outputs["BSDF"], mix.inputs[2])
     nt.links.new(mix.outputs["Shader"], out.inputs["Surface"])
@@ -881,7 +995,10 @@ def build(a):
             break
         except TypeError:
             continue
-    sc.view_settings.exposure = -0.20
+    # ‎-0.20 החזיר חול ומים שרופים ללבן. ‎-0.62 מחזיר את קו
+    # האופק ואת מרקם החול לתוך הטווח, והעור נשאר קריא כי
+    # ה-AgX מגלגל את ההיילייטס ולא מצמיד אותם.
+    sc.view_settings.exposure = -0.62
     sc.render.resolution_x = a.width
     sc.render.resolution_y = a.height
     sc.render.resolution_percentage = 100
@@ -898,7 +1015,7 @@ def build(a):
     water = plane("water", 500.0, (0.0, 120.0, -0.02))
     water.data.materials.append(wmat)
     fmat, foam = foam_material()
-    wet = plane("foam", 34.0, (0.0, 0.8, 0.014))
+    wet = plane("foam", 30.0, (0.0, 1.20, 0.014))
     wet.data.materials.append(fmat)
 
     bundle = Path(a.bundle)
@@ -907,13 +1024,13 @@ def build(a):
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
          "tone": (0.905, 0.735, 0.615), "flush": (0.78, 0.33, 0.29),
-         "hair": (0.185, 0.095, 0.045), "hair_len": 0.165,
+         "hair": (0.185, 0.095, 0.045), "hair_len": 0.082,
          "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000},
         # דמות ב': חולצת בטן.
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
          "turn": math.radians(8.0), "garment": "crop",
          "tone": (0.545, 0.375, 0.275), "flush": (0.62, 0.27, 0.23),
-         "hair": (0.035, 0.022, 0.016), "hair_len": 0.205,
+         "hair": (0.035, 0.022, 0.016), "hair_len": 0.104,
          "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962},
     ]
     cast, meta = [], []
@@ -957,7 +1074,12 @@ def build(a):
         # הורות-אובייקט. הורות בלבד הייתה משאירה אותן במקום
         # בעוד הראש מסתובב - כלומר דמות פוזלת. קבוצה בשם עצם
         # נותנת להן בדיוק את הטרנספורמציה של ``head_b``.
+        emat = eye_material("eye_" + s["tag"], fdir)
         for e in eyes:
+            e.data.materials.clear()
+            e.data.materials.append(emat)
+            for p in e.data.polygons:
+                p.use_smooth = True
             e.parent = root
             e.matrix_parent_inverse = root.matrix_world.inverted()
             if arm:
