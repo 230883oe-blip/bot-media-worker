@@ -1,0 +1,70 @@
+name: nvidia-blender-mux
+
+# קידוד בלבד, מפריימים של ריצה **קודמת**.
+#
+# למה זה קיים ולא תיקון במקום: ב-13/10 17:40 כל 12 הרנרים
+# סיימו בהצלחה (120/120 פריימים), ורק שלב הקידוד נפל - ``ffmpeg``
+# הוסר מתמונת ``ubuntu-latest`` של גיטהאב ואינו מותקן מראש.
+# להריץ 12 רנרים מחדש בגלל ``apt install`` זה בזבוז של כשעת
+# מכונה; ``actions/download-artifact`` עם ``run-id`` יודע למשוך
+# תוצרים מריצה אחרת, ולכן הפריימים שכבר קיימים נקראים משם.
+#
+# הקידוד נשאר בענן - וזו הנקודה. לפתוח את ה-zip בבית ולהריץ
+# ffmpeg מקומי היה מייצר את הקובץ המסופק על המכונה הביתית.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'מזהה הריצה שממנה לקחת פריימים'
+        required: true
+      ticket:
+        required: false
+        default: ''
+
+jobs:
+  mux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frames-*
+          merge-multiple: true
+          path: inbox
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: arkit-*
+          merge-multiple: true
+          path: inbox
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: קידוד בענן
+        run: |
+          mkdir -p artifacts
+          N=$(ls inbox/frames/*.png | wc -l)
+          V=$(python3 -c "import json;print(json.load(open('inbox/arkit.json'))['voice'])")
+          echo "פריימים: $N · שמע: $V"
+          test "$N" -ge 100
+          ffmpeg -y -framerate 24 -start_number 1 \
+            -i inbox/frames/f%04d.png -i "nvb/$V" \
+            -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p \
+            -c:a aac -b:a 128k -shortest \
+            artifacts/beach_nvb.mp4
+          cp inbox/frames/f0062.png artifacts/beach_master.png
+          cp inbox/blender_meta.json artifacts/ 2>/dev/null || true
+          cp inbox/arkit.json artifacts/ 2>/dev/null || true
+          echo "{\"frames\": $N, \"voice\": \"$V\", \"from_run\": \"${{ inputs.run_id }}\"}" \
+            > artifacts/mux.json
+          ls -l artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beach-nvb-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
