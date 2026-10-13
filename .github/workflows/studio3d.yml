@@ -45,6 +45,10 @@ on:
         description: 'שם HDRI ב-polyhaven'
         required: false
         default: 'fish_hoek_beach'
+      smoke_only:
+        description: 'רק מבחן קצר, בלי 120 הפריימים'
+        required: false
+        default: 'false'
 
 env:
   BL: '4.2.9'
@@ -122,6 +126,11 @@ jobs:
   # ----------------------------------------------------------- 20 רנרים
   render:
     needs: smoke
+    # אימות ויזואלי של שני פריימים עולה 6 דקות; 120 פריימים
+    # עולים שעה. אחרי שפריים המבחן של 13/10 הראה שיער מתפוצץ
+    # וקצף ששטף את החול, אין שום סיבה לשלם את השעה לפני
+    # שהעין אישרה את הדקות.
+    if: inputs.smoke_only != 'true'
     strategy:
       fail-fast: false
       matrix:
