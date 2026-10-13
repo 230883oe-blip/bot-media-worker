@@ -165,21 +165,33 @@ jobs:
           pattern: frames-*
           merge-multiple: true
           path: inbox
+      - uses: actions/download-artifact@v4
+        with:
+          name: arkit-${{ inputs.ticket }}
+          path: inbox
       - name: קידוד בענן
         run: |
           mkdir -p artifacts
-          ls inbox/frames | head -5
           N=$(ls inbox/frames/*.png | wc -l)
           echo "פריימים שהגיעו: $N מתוך ${TOTAL}"
-          echo "{\"frames_arrived\": $N, \"frames_expected\": ${TOTAL}}" \
+          # קטע השמע נבחר **בענן** בעבודת ה-A2F, ולכן שמו נקרא
+          # מ-arkit.json ולא נכתב כאן. מיקס עם קובץ אחר היה
+          # מפיל את סנכרון השפתיים בשקט.
+          V=$(python3 -c "import json;print(json.load(open('inbox/arkit.json'))['voice'])")
+          echo "שמע: $V"
+          echo "{\"frames_arrived\": $N, \"frames_expected\": ${TOTAL}, \"voice\": \"$V\"}" \
             > artifacts/mux.json
           test "$N" -ge 1
           ffmpeg -y -framerate 24 -start_number 1 \
-            -i inbox/frames/f%04d.png -i nvb/voice.wav \
+            -i inbox/frames/f%04d.png -i "nvb/$V" \
             -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p \
             -c:a aac -b:a 128k -shortest \
             artifacts/beach_nvb.mp4
+          # פריים ראשון כתמונת מאסטר, כדי שתהיה תמונה לצפייה
+          # ולא רק סרטון - בדיוק כמו בשוט הקודם.
+          cp inbox/frames/f0001.png artifacts/beach_master.png || true
           cp inbox/blender_meta.json artifacts/ 2>/dev/null || true
+          cp inbox/arkit.json artifacts/ 2>/dev/null || true
           ls -l artifacts
       - uses: actions/upload-artifact@v4
         if: always()
