@@ -96,8 +96,15 @@ jobs:
           gunzip -kf nvb/assets/nava.glb.gz
           ./${BLDIR}/blender -b --factory-startup -P nvb/beach_blender.py -- \
             --glb nvb/assets/nava.glb --arkit inbox/arkit.json \
-            --out artifacts/smoke --start 1 --end 1 --total ${TOTAL} \
-            --samples 8 --width 320 --height 180
+            --out artifacts/smoke --start 1 --end 2 --total ${TOTAL} \
+            --samples 16 --width 480 --height 270
+          # פריים מאמצע השוט: שם ההפניה והחיוך בשיא, ושם תקלת
+          # בימוי נראית. פריים 1 לבדו הראה "תקין" בעוד שהידיים
+          # היו פרושות לצדדים לאורך כל השוט.
+          ./${BLDIR}/blender -b --factory-startup -P nvb/beach_blender.py -- \
+            --glb nvb/assets/nava.glb --arkit inbox/arkit.json \
+            --out artifacts/smoke --start 62 --end 62 --total ${TOTAL} \
+            --samples 16 --width 480 --height 270
           ls -l artifacts/smoke
       - uses: actions/upload-artifact@v4
         if: always()
