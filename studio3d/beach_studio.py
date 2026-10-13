@@ -104,19 +104,31 @@ def load_asset(bundle: Path):
     want = [BODY, *EYES]
     with bpy.data.libraries.load(str(bundle), link=False) as (src, dst):
         have = list(src.objects)
-        missing = [n for n in want if n not in have]
-        if BODY in missing:
+        if BODY not in have:
             raise SystemExit(
                 "הגוף %r אינו בחבילה. יש: %s" % (BODY, have[:40]))
         dst.objects = [n for n in want if n in have]
-    got = {}
+        loaded_names = list(dst.objects)
+    # **אחרי** ה-``with`` הופך ``dst.objects`` מרשימת שמות לרשימת
+    # אובייקטים. קוראים אותה ולא סורקים את ``bpy.data``: בטעינה
+    # השנייה בלנדר עשוי להוסיף ``.001`` ואז סריקה לפי שם מחזירה
+    # את הדמות הראשונה - שתי דמויות שחולקות אובייקט אחד.
+    objs = [o for o in dst.objects if o is not None]
     coll = bpy.context.scene.collection
-    for ob in list(bpy.data.objects):
-        if ob.name in want and ob.users_collection == ():
+    got, body = {}, None
+    for ob in objs:
+        if ob.name not in {c.name for c in coll.all_objects}:
             coll.objects.link(ob)
-        if ob.name in want:
-            got[ob.name] = ob
-    log("נטען מהחבילה: %s" % sorted(got))
+    for ob in objs:
+        base = ob.name.split(".00")[0]
+        if base == BODY and ob.type == "MESH" and ".eye" not in ob.name:
+            body, got["body"] = ob, ob
+        elif ".eye" in ob.name:
+            got.setdefault("eyes", []).append(ob)
+    if body is None:
+        raise SystemExit("הגוף לא נטען. שמות: %s" % loaded_names)
+    log("נטען מהחבילה: גוף %s + %d עיניים"
+        % (body.name, len(got.get("eyes") or [])))
     return got
 
 
@@ -272,6 +284,11 @@ def build_rig(body, h: float):
     arm_data = bpy.data.armatures.new("rig")
     arm = bpy.data.objects.new("rig", arm_data)
     bpy.context.scene.collection.objects.link(arm)
+    # ``mode_set`` דורש אובייקט פעיל **ומסומן**. בלי ה-select
+    # הוא נופל ב-"context is incorrect" דווקא ב-``--background``,
+    # שבו אין חלון שמסמן בשבילך.
+    bpy.ops.object.select_all(action="DESELECT")
+    arm.select_set(True)
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode="EDIT")
     made = {}
@@ -475,6 +492,29 @@ def cloth_material(name: str, col, rough=0.72):
 
 # ----------------------------------------------------------------- שיער
 
+def _set(obj, **kw):
+    """מציב תכונות ומדווח על מה שאינו קיים בגרסה שרצה.
+
+    נולד מכשל אמיתי (13/10, ריצה 38463176203): ``child_nbr`` הוסר
+    מ-``ParticleSettings``, והסקריפט נפל אחרי שכבר בנה גוף, פיסל
+    חזה ותפר בגד - 50 שניות ענן על שם תכונה. שמות ה-API של
+    חלקיקים השתנו לרוחב בין 2.7 ל-4.2, ולכן **כל** הצבה כאן
+    עוברת דרך כאן, ולא רק זו שנפלה.
+    """
+    missing = []
+    for k, v in kw.items():
+        if not hasattr(obj, k):
+            missing.append(k)
+            continue
+        try:
+            setattr(obj, k, v)
+        except Exception as e:                               # noqa: BLE001
+            missing.append("%s(%s)" % (k, e))
+    if missing:
+        log("    תכונות שאינן נתמכות ודולגו: %s" % ", ".join(missing))
+    return missing
+
+
 def add_hair(body, length: float, col, count=2600, children=9000):
     """שיער כגאומטריה, לא כמשטח מוצק.
 
@@ -491,32 +531,18 @@ def add_hair(body, length: float, col, count=2600, children=9000):
     ps = body.particle_systems[-1]
     ps.vertex_group_density = "scalp"
     s = ps.settings
-    s.type = "HAIR"
-    s.count = count
-    s.hair_length = length
-    s.hair_step = 6
-    s.use_strand_primitive = True
-    s.use_hair_bspline = True
-    s.child_type = "INTERPOLATED"
-    s.child_nbr = 24
-    s.rendered_child_count = children
-    s.child_length = 0.95
-    s.child_radius = 0.030
-    s.clump_factor = 0.62
-    s.clump_shape = 0.22
-    s.roughness_1 = 0.012
-    s.roughness_1_size = 0.06
-    s.roughness_2 = 0.022
-    s.roughness_2_size = 0.22
-    s.roughness_endpoint = 0.010
-    s.kink = "CURL"
-    s.kink_amplitude = 0.012
-    s.kink_frequency = 2.1
-    s.kink_shape = 0.25
-    s.root_radius = 0.0035
-    s.tip_radius = 0.0004
-    s.radius_scale = 0.012
-    s.use_close_tip = True
+    _set(s, type="HAIR", count=count, hair_length=length, hair_step=6,
+         use_hair_bspline=True, child_type="INTERPOLATED",
+         rendered_child_count=children, child_percent=24,
+         child_length=0.95, child_radius=0.030,
+         clump_factor=0.62, clump_shape=0.22,
+         roughness_1=0.012, roughness_1_size=0.06,
+         roughness_2=0.022, roughness_2_size=0.22,
+         roughness_endpoint=0.010,
+         kink="CURL", kink_amplitude=0.012, kink_frequency=2.1,
+         kink_shape=0.25,
+         root_radius=0.008, tip_radius=0.001, radius_scale=0.010,
+         use_close_tip=True)
     # חומר השיער הוא הסלוט השני של הגוף.
     mi = len(body.data.materials)
     body.data.materials.append(hair_material("hair_" + body.name, col))
@@ -548,6 +574,10 @@ def make_garment(body, idx: dict, name: str, mat, thick=0.0035,
     bm.verts.ensure_lookup_table()
     doomed = [bm.verts[i] for i in range(len(bm.verts)) if i not in keep]
     bmesh.ops.delete(bm, geom=doomed, context="VERTS")
+    # **אחרי** המחיקה. נורמל של קודקוד שאיבד חצי מהפאות שלו הוא
+    # נורמל אחר, ודחיקה לפי הנורמל הישן הייתה פותחת את הבגד
+    # בשוליים בדיוק במקום שהוא צריך להיות צמוד.
+    bm.normal_update()
     for v in bm.verts:
         v.co += v.normal * offset
     bm.to_mesh(me)
@@ -556,6 +586,18 @@ def make_garment(body, idx: dict, name: str, mat, thick=0.0035,
         log("  בגד %s: פחות מ-50 קודקודים - מבוטל" % name)
         bpy.data.objects.remove(ob, do_unlink=True)
         return None
+    # שמות קבוצות הקודקודים מועתקים **באותו סדר**. משקלי
+    # הדפורמציה נשמרים בתוך ה-mesh ומועתקים עם ``data.copy()``,
+    # אבל רשימת השמות יושבת על האובייקט. בלי זה ה-ARMATURE על
+    # הבגד רץ על קבוצות ריקות, הבגד נשאר קפוא בעוד הגוף נושם,
+    # והראש שמסתובב מושך את הגוף מתוך הבגד.
+    for g in body.vertex_groups:
+        ob.vertex_groups.new(name=g.name)
+    arm_src = next((m.object for m in body.modifiers
+                    if m.type == "ARMATURE" and m.object), None)
+    if arm_src:
+        am = ob.modifiers.new("arm", "ARMATURE")
+        am.object = arm_src
     sol = ob.modifiers.new("thick", "SOLIDIFY")
     sol.thickness = thick
     sol.offset = 1.0
@@ -667,6 +709,10 @@ def water_material():
             break
     n = nt.nodes.new("ShaderNodeTexNoise")
     n.location = (-700, -260)
+    # 4D ולא 3D: ציר ה-W הוא מה שמאפשר להזיז את הגלים בזמן
+    # בלי להזיז את המשטח. ב-3D אין קלט ``W`` בכלל, והבימוי
+    # היה "מצליח" בשקט עם ים קפוא.
+    n.noise_dimensions = "4D"
     n.inputs["Scale"].default_value = 26.0
     n.inputs["Detail"].default_value = 8.0
     bp = nt.nodes.new("ShaderNodeBump")
@@ -688,6 +734,7 @@ def foam_material():
     b.inputs["Roughness"].default_value = 0.52
     n = nt.nodes.new("ShaderNodeTexNoise")
     n.location = (-700, 200)
+    n.noise_dimensions = "4D"
     n.inputs["Scale"].default_value = 14.0
     n.inputs["Detail"].default_value = 9.0
     r = nt.nodes.new("ShaderNodeValToRGB")
@@ -856,8 +903,8 @@ def build(a):
     cast, meta = [], []
     for s in specs:
         got = load_asset(bundle)
-        body = got[BODY]
-        eyes = [got[n] for n in EYES if n in got]
+        body = got["body"]
+        eyes = list(got.get("eyes") or [])
         body.name = "body_" + s["tag"]
         for i, e in enumerate(eyes):
             e.name = "eye%d_%s" % (i, s["tag"])
@@ -871,26 +918,40 @@ def build(a):
         body.data.materials.append(skin)
         for p in body.data.polygons:
             p.use_smooth = True
+
+        # **סדר השכבות הוא התיקון, לא קישוט.** בלנדר מחשב
+        # מודיפיירים בשרשרת, ולכן:
+        #   ARMATURE -> SUBSURF -> PARTICLE(hair)
+        # אם השיער היה לפני ה-ARMATURE, הוא היה נצמח על הגוף
+        # הלא-מעוות ונשאר תלוי באוויר כשהראש מסתובב 21°. הריג
+        # קודם, ומכאן גם שהבגד נבנה אחריו - כדי שיירש את משקלי
+        # הדפורמציה שלו.
+        arm = build_rig(body, h)
         sub = body.modifiers.new("sub", "SUBSURF")
         sub.levels = 0
         sub.render_levels = 2
         sub.use_limit_surface = True
-
         garment = make_garment(
             body, groups[s["garment"]], "cloth_" + s["tag"],
             cloth_material("fabric_" + s["tag"], s["cloth"]))
         add_hair(body, s["hair_len"], s["hair"])
 
-        arm = build_rig(body, h)
         root = arm if arm else body
-        # הבגד והעיניים נוסעים עם הדמות. הבגד מקבל את אותו
-        # ריג כדי שלא יישאר תלוי באוויר כשהגוף נושם.
-        for ob in [*eyes] + ([garment] if garment else []):
-            ob.parent = root
-            ob.matrix_parent_inverse = root.matrix_world.inverted()
-        if arm and garment:
-            m = garment.modifiers.new("arm", "ARMATURE")
-            m.object = arm
+        # העיניים: ``ARMATURE`` עם קבוצה בשם העצם ובמשקל 1, ולא
+        # הורות-אובייקט. הורות בלבד הייתה משאירה אותן במקום
+        # בעוד הראש מסתובב - כלומר דמות פוזלת. קבוצה בשם עצם
+        # נותנת להן בדיוק את הטרנספורמציה של ``head_b``.
+        for e in eyes:
+            e.parent = root
+            e.matrix_parent_inverse = root.matrix_world.inverted()
+            if arm:
+                g = e.vertex_groups.new(name="head_b")
+                g.add(list(range(len(e.data.vertices))), 1.0, "REPLACE")
+                em = e.modifiers.new("arm", "ARMATURE")
+                em.object = arm
+        if garment:
+            garment.parent = root
+            garment.matrix_parent_inverse = root.matrix_world.inverted()
         root.location = (s["x"], s["y"], 0.0)
         root.rotation_euler = (0.0, 0.0, s["yaw"])
         root.scale = (s["scale"],) * 3
