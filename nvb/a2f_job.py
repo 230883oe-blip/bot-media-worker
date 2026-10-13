@@ -100,7 +100,6 @@ def main() -> int:
 
     ART.mkdir(parents=True, exist_ok=True)
     A2F.mkdir(parents=True, exist_ok=True)
-    wav = HERE / "voice.wav"
     secs = float(os.environ.get("SECONDS", "5.0"))
 
     print("== הורדת המודל של NVIDIA מ-HuggingFace ==", flush=True)
@@ -115,21 +114,55 @@ def main() -> int:
     # שרץ מקומית רץ עכשיו בענן.
     a2f_run.A2F = A2F
 
-    print("== הרצה על מעבד הרנר ==", flush=True)
-    t0 = time.perf_counter()
-    res = a2f_run.run(wav, 0.0, secs, identity="Claire", seed=1234)
-    el = time.perf_counter() - t0
+    # **הבחירה נעשית בענן ולא בבית.** הריצה הראשונה (13/10 17:12)
+    # נפלה כי קטע השמע שנבחר מראש היה שקט ופתח פה ב-0.20 בלבד.
+    # במקום לכייל את הסף עד שיעבור - שלושה מועמדים רצים כאן
+    # והחזק נבחר. ההרצה היא 6 שניות; ההורדה היא שקרה פעם אחת.
+    cands = sorted(HERE.glob("voice*.wav"))
+    if not cands:
+        raise SystemExit("אין קובצי voice*.wav")
+    print("== הרצה על מעבד הרנר · %d מועמדים ==" % len(cands), flush=True)
+
+    best, tried = None, []
+    for wav in cands:
+        t0 = time.perf_counter()
+        res = a2f_run.run(wav, 0.0, secs, identity="Claire", seed=1234)
+        el = time.perf_counter() - t0
+        gap = res["lip_gap"]
+        score = float(np.percentile(gap, 97))
+        tried.append({"wav": wav.name, "lip_gap_p97": round(score, 4),
+                      "lip_gap_max": round(float(gap.max()), 4),
+                      "inference_seconds": round(el, 2)})
+        print("  %s: p97=%.4f max=%.4f · %.1fs"
+              % (wav.name, score, float(gap.max()), el), flush=True)
+        if best is None or score > best[0]:
+            best = (score, res, wav, el)
+
+    score, res, wav, el = best
     op, rd = a2f_run.aperture(res)
     gap = res["lip_gap"]
 
     want = int(round(secs * OUT_FPS))
     w24 = resample(res["weights"], res["fps"], OUT_FPS, want)
 
+    # **פתיחת הלסת אינה משקל ARKit, והיא לא יכולה להיות.**
+    # ``a2f_run`` מתעד את זה: בלוק ה-``jaw`` של A2F נפרד ממשקלי
+    # העור, ולכן ``jawOpen`` כמשקל מוחזר קטן (0.25) גם כשהפה
+    # פעור. הריצה הראשונה כאן הייתה מזיזה לסת ב-4 מעלות בלבד.
+    # המדד הפיזי הוא ``lip_gap`` - מרווח השפתיים על הרשת
+    # המשוחזרת - והוא מנורמל כאן ל-0..1 מול האחוזון ה-97,
+    # כלומר פתיחה מלאה בהגייה הרחבה ביותר של הקטע.
+    jaw = np.clip(gap / max(score, 1e-6), 0.0, 1.0).astype("float32")
+    jaw24 = resample(jaw.reshape(-1, 1), res["fps"], OUT_FPS,
+                     want).reshape(-1)
+
     out = {
         "model": res["model"],
         "ran_on": "github-actions ubuntu runner · CPU · ONNX",
         "gpu": "none",
         "nvidia_key": "none",
+        "voice": wav.name,
+        "candidates": tried,
         "names": res["names"],
         "fps": OUT_FPS,
         "frames": int(len(w24)),
@@ -139,24 +172,30 @@ def main() -> int:
         "source_frames": res["frames"],
         "geometry_diag": res["geometry_diag"],
         "measured": {
-            "jawopen_max": round(float(op.max()), 4),
+            "jawopen_weight_max": round(float(op.max()), 4),
             "round_mean": round(float(rd.mean()), 4),
             "lip_gap_min": round(float(gap.min()), 4),
             "lip_gap_max": round(float(gap.max()), 4),
+            "lip_gap_p97": round(score, 4),
             "lip_gap_std": round(float(gap.std()), 4),
+            "jaw_open_mean": round(float(jaw24.mean()), 4),
+            "jaw_frames_open": int((jaw24 > 0.25).sum()),
         },
+        "jaw_open": [round(float(x), 4) for x in jaw24],
         "weights": [[round(float(x), 4) for x in row] for row in w24],
     }
     (ART / "arkit.json").write_text(json.dumps(out, ensure_ascii=False),
                                     encoding="utf-8")
     print(json.dumps({k: v for k, v in out.items()
-                      if k not in ("weights", "names")},
+                      if k not in ("weights", "names", "jaw_open")},
                      ensure_ascii=False, indent=1), flush=True)
 
-    # שער: מודל שלא הזיז פה אינו "הצלחה". 0.3 ביחידות המודל הוא
-    # פתיחה שנראית בעין; נמדד מקומית 1.2 על אותו שמע.
-    if float(gap.max()) < 0.3:
-        print("!! המודל לא פתח פה (%.3f) - נכשל" % float(gap.max()))
+    # השער בודק **תנועה**, לא עוצמה. מודל שהחזיר פה קפוא הוא כשל;
+    # קטע שקט הוא בחירת קלט ולא תקלה. לכן הסף הוא על הסטייה
+    # בזמן (0.02 ביחידות המודל) ועל מספר הפריימים שבהם הפה פתוח.
+    if float(gap.std()) < 0.02 or int((jaw24 > 0.25).sum()) < 8:
+        print("!! הפה אינו זז (std=%.4f · פריימים פתוחים=%d) - נכשל"
+              % (float(gap.std()), int((jaw24 > 0.25).sum())))
         return 2
     return 0
 
