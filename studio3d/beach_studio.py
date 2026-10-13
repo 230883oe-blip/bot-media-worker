@@ -598,7 +598,7 @@ def _set(obj, **kw):
     return missing
 
 
-def add_hair(body, length: float, col, count=3200, children=8):
+def add_hair(body, length: float, col, count=4200, children=16):
     """שיער כגאומטריה, לא כמשטח מוצק.
 
     מערכת חלקיקים ולא Curves: ב-4.2 ``curves_empty_hair_add`` דורש
@@ -638,7 +638,7 @@ def add_hair(body, length: float, col, count=3200, children=8):
          roughness_endpoint=0.004,
          kink="CURL", kink_amplitude=0.006, kink_frequency=3.0,
          kink_shape=0.15,
-         root_radius=0.008, tip_radius=0.001, radius_scale=0.010,
+         root_radius=0.010, tip_radius=0.0015, radius_scale=0.030,
          use_close_tip=True)
     # חומר השיער הוא הסלוט השני של הגוף.
     mi = len(body.data.materials)
@@ -766,30 +766,92 @@ def plane(name, size, loc, rot=(0, 0, 0)):
 
 
 def sand_material():
+    """חול עם מרקם **במטרים**, לא בקואורדינטות מנורמלות.
+
+    זו הייתה התקלה השקטה בפריים המבחן: ``Generated`` נותן 0..1
+    על פני המישור כולו, ועל מישור של 120 מטר ``Scale=85`` הוא
+    תקופה של 1.4 מטר - כלומר כתם אחד לכל הקאדר. התוצאה נמדדה
+    כמשטח אחיד בלי מרקם, ובדיוק זה מה שהשער פוסל כ-``flat_ratio``
+    ו-``chroma_std``. ``Object`` נותן מטרים, ולכן ``Scale=14``
+    הוא תקופה של 7 ס"מ - ריאליסטי, ונשאר נכון גם אם גודל
+    המישור ישתנה.
+
+    שלוש שכבות: גרגר דק, כתמי לחות כהים ליד קו המים, וצדפים
+    בהירים. שלושתן מפרידות גוון ולא רק בהירות - ולכן הן נמדדות.
+    """
     mat = bpy.data.materials.new("sand")
     nt, out = _nodes(mat)
     b = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    b.location = (300, 0)
+    b.location = (520, 0)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-1150, 0)
+
     n = nt.nodes.new("ShaderNodeTexNoise")
-    n.location = (-700, 0)
-    n.inputs["Scale"].default_value = 85.0
-    n.inputs["Detail"].default_value = 10.0
+    n.location = (-900, 140)
+    n.inputs["Scale"].default_value = 14.0
+    n.inputs["Detail"].default_value = 12.0
+    n.inputs["Roughness"].default_value = 0.62
+    nt.links.new(tc.outputs["Object"], n.inputs["Vector"])
     r = nt.nodes.new("ShaderNodeValToRGB")
-    r.location = (-450, 0)
-    r.color_ramp.elements[0].color = (0.62, 0.52, 0.40, 1)
-    r.color_ramp.elements[1].color = (0.86, 0.78, 0.63, 1)
+    r.location = (-660, 140)
+    r.color_ramp.elements[0].position = 0.30
+    r.color_ramp.elements[0].color = (0.355, 0.268, 0.178, 1)
+    r.color_ramp.elements[1].position = 0.72
+    r.color_ramp.elements[1].color = (0.735, 0.645, 0.492, 1)
     nt.links.new(n.outputs["Fac"], r.inputs["Fac"])
-    nt.links.new(r.outputs["Color"], b.inputs["Base Color"])
+
+    # כתמי לחות: תדר נמוך, גוון קר וכהה. חול רטוב הוא ההבדל
+    # הגדול ביותר בין "מישור בז'" לחוף.
+    w = nt.nodes.new("ShaderNodeTexNoise")
+    w.location = (-900, -140)
+    w.inputs["Scale"].default_value = 1.6
+    w.inputs["Detail"].default_value = 6.0
+    nt.links.new(tc.outputs["Object"], w.inputs["Vector"])
+    wr = nt.nodes.new("ShaderNodeValToRGB")
+    wr.location = (-660, -140)
+    wr.color_ramp.elements[0].position = 0.42
+    wr.color_ramp.elements[0].color = (0, 0, 0, 1)
+    wr.color_ramp.elements[1].position = 0.66
+    wr.color_ramp.elements[1].color = (1, 1, 1, 1)
+    nt.links.new(w.outputs["Fac"], wr.inputs["Fac"])
+    mixw = nt.nodes.new("ShaderNodeMixRGB")
+    mixw.location = (-380, 60)
+    mixw.blend_type = "MIX"
+    mixw.inputs["Color2"].default_value = (0.212, 0.176, 0.145, 1)
+    nt.links.new(wr.outputs["Color"], mixw.inputs["Fac"])
+    nt.links.new(r.outputs["Color"], mixw.inputs["Color1"])
+
+    # צדפים/גרגרי קוורץ בהירים: Voronoi דליל, תדר גבוה.
+    v = nt.nodes.new("ShaderNodeTexVoronoi")
+    v.location = (-900, -420)
+    v.inputs["Scale"].default_value = 90.0
+    nt.links.new(tc.outputs["Object"], v.inputs["Vector"])
+    vr = nt.nodes.new("ShaderNodeValToRGB")
+    vr.location = (-660, -420)
+    vr.color_ramp.elements[0].position = 0.013
+    vr.color_ramp.elements[0].color = (1, 1, 1, 1)
+    vr.color_ramp.elements[1].position = 0.030
+    vr.color_ramp.elements[1].color = (0, 0, 0, 1)
+    nt.links.new(v.outputs["Distance"], vr.inputs["Fac"])
+    mixs = nt.nodes.new("ShaderNodeMixRGB")
+    mixs.location = (-180, 20)
+    mixs.inputs["Color2"].default_value = (0.90, 0.87, 0.80, 1)
+    nt.links.new(vr.outputs["Color"], mixs.inputs["Fac"])
+    nt.links.new(mixw.outputs["Color"], mixs.inputs["Color1"])
+    nt.links.new(mixs.outputs["Color"], b.inputs["Base Color"])
+
     g = nt.nodes.new("ShaderNodeTexNoise")
-    g.location = (-700, -300)
-    g.inputs["Scale"].default_value = 900.0
+    g.location = (-900, -680)
+    g.inputs["Scale"].default_value = 140.0
+    g.inputs["Detail"].default_value = 14.0
+    nt.links.new(tc.outputs["Object"], g.inputs["Vector"])
     bp = nt.nodes.new("ShaderNodeBump")
-    bp.location = (-300, -300)
-    bp.inputs["Strength"].default_value = 0.85
-    bp.inputs["Distance"].default_value = 0.004
+    bp.location = (-180, -620)
+    bp.inputs["Strength"].default_value = 1.0
+    bp.inputs["Distance"].default_value = 0.020
     nt.links.new(g.outputs["Fac"], bp.inputs["Height"])
     nt.links.new(bp.outputs["Normal"], b.inputs["Normal"])
-    b.inputs["Roughness"].default_value = 0.88
+    b.inputs["Roughness"].default_value = 0.90
     nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat
 
@@ -807,20 +869,40 @@ def water_material():
         if k in b.inputs:
             b.inputs[k].default_value = v
             break
+    # שתי שכבות גלים, שתיהן בקואורדינטות **אובייקט** (מטרים):
+    # ``Scale`` ב-Noise הוא תקופות ליחידה, ולכן 0.42 הוא גל של
+    # כ-2.4 מטר ו-5.5 הוא אדווה של 18 ס"מ. הערך הקודם (26 על
+    # Generated של מישור 500 מטר) היה תדר שאינו קיים בשום ים,
+    # ולכן המשטח נמדד כחלק.
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-1000, -260)
     n = nt.nodes.new("ShaderNodeTexNoise")
-    n.location = (-700, -260)
+    n.location = (-760, -180)
     # 4D ולא 3D: ציר ה-W הוא מה שמאפשר להזיז את הגלים בזמן
     # בלי להזיז את המשטח. ב-3D אין קלט ``W`` בכלל, והבימוי
     # היה "מצליח" בשקט עם ים קפוא.
     n.noise_dimensions = "4D"
-    n.inputs["Scale"].default_value = 26.0
-    n.inputs["Detail"].default_value = 8.0
+    n.inputs["Scale"].default_value = 0.42
+    n.inputs["Detail"].default_value = 9.0
+    nt.links.new(tc.outputs["Object"], n.inputs["Vector"])
+    n2 = nt.nodes.new("ShaderNodeTexNoise")
+    n2.location = (-760, -480)
+    n2.noise_dimensions = "4D"
+    n2.inputs["Scale"].default_value = 5.5
+    n2.inputs["Detail"].default_value = 10.0
+    nt.links.new(tc.outputs["Object"], n2.inputs["Vector"])
     bp = nt.nodes.new("ShaderNodeBump")
-    bp.location = (-300, -260)
-    bp.inputs["Strength"].default_value = 0.42
-    bp.inputs["Distance"].default_value = 0.010
+    bp.location = (-420, -260)
+    bp.inputs["Strength"].default_value = 0.85
+    bp.inputs["Distance"].default_value = 0.090
     nt.links.new(n.outputs["Fac"], bp.inputs["Height"])
-    nt.links.new(bp.outputs["Normal"], b.inputs["Normal"])
+    bp2 = nt.nodes.new("ShaderNodeBump")
+    bp2.location = (-180, -300)
+    bp2.inputs["Strength"].default_value = 0.55
+    bp2.inputs["Distance"].default_value = 0.010
+    nt.links.new(n2.outputs["Fac"], bp2.inputs["Height"])
+    nt.links.new(bp.outputs["Normal"], bp2.inputs["Normal"])
+    nt.links.new(bp2.outputs["Normal"], b.inputs["Normal"])
     nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat, n
 
@@ -890,7 +972,7 @@ def foam_material():
 
 # ---------------------------------------------------------------- מצלמה
 
-def fit_camera(obs, lens=62.0, margin=0.10, w=960, h=540):
+def fit_camera(obs, lens=85.0, margin=0.015, w=960, h=540):
     """קאדר גוף-מלא שנגזר מה-bbox של השחקנים ולא ממספר קשיח.
 
     פעמיים כבר נחתכו כאן רגליים או ראשים כי המצלמה הוצבה ידנית.
@@ -917,9 +999,17 @@ def fit_camera(obs, lens=62.0, margin=0.10, w=960, h=540):
     sh = sw * h / w
     dz = bh * lens / sh
     dx = bw * lens / sw
-    dist = max(dz, dx) + (hi.y - lo.y) * 0.5 + 0.25
-    cam.location = (ctr.x + 0.10, ctr.y - dist, ctr.z + 0.045)
-    cam.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+    # **הקאדר הוא מנוף איכות ולא טעם.** בפריים המבחן הדמויות
+    # תפסו כ-45% מגובה הפריים, והיתר היה חול וים - שני משטחים
+    # שהשער מודד כ-``flat_ratio`` גבוה וכ-``chroma_std`` נמוך.
+    # שוליים 1.5% ועדשה 85מ"מ מכניסים את אותו גוף-מלא, אבל
+    # ממלאים את הפריים בעור, בד ושיער במקום בחול.
+    dist = max(dz, dx) + (hi.y - lo.y) * 0.5 + 0.18
+    # גובה המצלמה בגובה החזה ולא בגובה האגן: כך קו האופק יושב
+    # מאחורי הדמויות, ופחות חול חזיתי נכנס לקאדר.
+    cam.location = (ctr.x + 0.06, ctr.y - dist, ctr.z + 0.22)
+    cam.rotation_euler = (math.radians(90.0) - math.atan2(0.22, dist),
+                          0.0, 0.0)
     # ``aperture_fsize`` הוא שם מ-2.7x. ב-2.8+ זה ``aperture_fstop``,
     # ולכן ההצבה עוברת דרך ``_set`` ולא נופלת על שם.
     _set(cam_d.dof, use_dof=True, focus_distance=dist,
@@ -1024,13 +1114,13 @@ def build(a):
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
          "tone": (0.905, 0.735, 0.615), "flush": (0.78, 0.33, 0.29),
-         "hair": (0.185, 0.095, 0.045), "hair_len": 0.082,
+         "hair": (0.072, 0.034, 0.016), "hair_len": 0.082,
          "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000},
         # דמות ב': חולצת בטן.
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
          "turn": math.radians(8.0), "garment": "crop",
          "tone": (0.545, 0.375, 0.275), "flush": (0.62, 0.27, 0.23),
-         "hair": (0.035, 0.022, 0.016), "hair_len": 0.104,
+         "hair": (0.022, 0.014, 0.010), "hair_len": 0.104,
          "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962},
     ]
     cast, meta = [], []
