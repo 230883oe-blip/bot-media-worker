@@ -1,0 +1,210 @@
+name: studio3d-beach
+
+# שוט החוף על **נכס אולפן**. הכול על רנרים מרוחקים: אין שלב אחד
+# שרץ על המכונה הביתית, גם לא ההורדה של הנכס.
+#
+# שלוש החלטות שנגזרו ממדידה ולא מהעדפה:
+#
+#   1. **הנכס אינו נדחף למאגר.** הוא מורד ברנר ישר
+#      מ-``download.blender.org``. חבילת Blender Studio היא 62MB,
+#      וה-contents API של גיטהאב עובד ב-base64 (×1.33) - כלומר
+#      83MB לכל דחיפה. הורדה מהמקור היא גם מהירה יותר וגם
+#      מוכיחה מאיפה הנכס בא.
+#   2. **אין עבודת a2f ואין רצועת שמע.** הבקשה הייתה מפורשת:
+#      בלי שמע ובלי סנכרון שפתיים. לכן גם ``ffmpeg`` כאן הוא
+#      וידאו בלבד - ``-an`` אינו צריך להיות שם, אין בכלל קלט שמע.
+#   3. **20 מקטעים ולא 12.** Cycles על מעבד עם שיער-גדילים, SSS
+#      ו-subdivision 2 הוא כבד בהרבה מהנכס הפרוצדורלי הקודם.
+#      התקרה המקבילה בחשבון חינמי היא 20 עבודות, ולכן 20×6=120.
+#
+# מלכודות שנסגרו כאן מראש (כולן נמדדו ב-13/10):
+#   * בלנדר מופץ בלי תלויות X ונופל ב-libXi.so.6 גם ב-``-b``.
+#   * ``ffmpeg`` אינו מותקן ב-ubuntu-latest (exit 127 אחרי
+#     שכל 120 הפריימים כבר רונדרו).
+#   * ``download-artifact`` עם ``pattern`` דורש ``merge-multiple``.
+#   * ``actions/cache`` על הטארבול חוסך 300MB × 21 עבודות.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'מזהה כרטיס'
+        required: false
+        default: ''
+      samples:
+        description: 'דגימות Cycles לפריים'
+        required: false
+        default: '64'
+      width:
+        required: false
+        default: '960'
+      height:
+        required: false
+        default: '540'
+      hdri:
+        description: 'שם HDRI ב-polyhaven'
+        required: false
+        default: 'fish_hoek_beach'
+
+env:
+  BL: '4.2.9'
+  BLDIR: blender-4.2.9-linux-x64
+  TOTAL: '120'
+  PER: '6'
+  HBM: 'https://download.blender.org/demo/bundles/bundles-3.6/human-base-meshes-bundle-v1.0.0.zip'
+
+jobs:
+  # ------------------------------------------------------------ מבחן קצר
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: תלויות בלנדר
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxrender1 libxxf86vm1 \
+            libxfixes3 libgl1 libsm6 libxkbcommon0 xz-utils unzip
+      - uses: actions/cache@v4
+        with:
+          path: blender.tar.xz
+          key: blender-${{ env.BL }}-linux
+      - uses: actions/cache@v4
+        with:
+          path: hbm.zip
+          key: hbm-v1.0.0
+      - name: בלנדר
+        run: |
+          test -f blender.tar.xz || curl -fL --max-time 600 -o blender.tar.xz \
+            "https://download.blender.org/release/Blender4.2/blender-${BL}-linux-x64.tar.xz"
+          tar xf blender.tar.xz
+          ./${BLDIR}/blender --version
+      - name: נכס Blender Studio + HDRI של polyhaven
+        run: |
+          test -f hbm.zip || curl -fL --max-time 600 -o hbm.zip "${HBM}"
+          mkdir -p hbm hdri
+          unzip -o -q hbm.zip -d hbm
+          ls -l hbm
+          curl -fL --max-time 600 -o hdri/beach.hdr \
+            "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/${{ inputs.hdri }}_4k.hdr"
+          ls -l hdri
+      - name: מה בדיוק יש בחבילה
+        run: |
+          mkdir -p artifacts
+          ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
+            --bundle hbm/human_base_meshes_bundle.blend --hdri hdri/beach.hdr \
+            --out artifacts/x --inventory | tee artifacts/inventory.txt
+      - name: שני פריימים קטנים
+        run: |
+          # פריים 1 ופריים 62. פריים 1 לבדו הראה "תקין" בעבר
+          # בעוד שהבימוי היה שבור לאורך כל השוט.
+          for F in 1 62; do
+            ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
+              --bundle hbm/human_base_meshes_bundle.blend \
+              --hdri hdri/beach.hdr --out artifacts/smoke \
+              --start $F --end $F --total ${TOTAL} \
+              --samples 24 --width 480 --height 270
+          done
+          ls -l artifacts/smoke
+          test -s artifacts/smoke/f0001.png
+          test -s artifacts/smoke/f0062.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  # ----------------------------------------------------------- 20 רנרים
+  render:
+    needs: smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: תלויות בלנדר
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxrender1 libxxf86vm1 \
+            libxfixes3 libgl1 libsm6 libxkbcommon0 xz-utils unzip
+      - uses: actions/cache@v4
+        with:
+          path: blender.tar.xz
+          key: blender-${{ env.BL }}-linux
+      - uses: actions/cache@v4
+        with:
+          path: hbm.zip
+          key: hbm-v1.0.0
+      - name: בלנדר ונכסים
+        run: |
+          test -f blender.tar.xz || curl -fL --max-time 600 -o blender.tar.xz \
+            "https://download.blender.org/release/Blender4.2/blender-${BL}-linux-x64.tar.xz"
+          tar xf blender.tar.xz
+          test -f hbm.zip || curl -fL --max-time 600 -o hbm.zip "${HBM}"
+          mkdir -p hbm hdri
+          unzip -o -q hbm.zip -d hbm
+          curl -fL --max-time 600 -o hdri/beach.hdr \
+            "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/${{ inputs.hdri }}_4k.hdr"
+      - name: רנדר מקטע
+        run: |
+          S=$(( (${{ matrix.shard }} - 1) * PER + 1 ))
+          E=$(( S + PER - 1 ))
+          [ $E -gt $TOTAL ] && E=$TOTAL
+          echo "מקטע ${{ matrix.shard }}: פריימים $S..$E"
+          ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
+            --bundle hbm/human_base_meshes_bundle.blend \
+            --hdri hdri/beach.hdr --out artifacts/frames \
+            --start $S --end $E --total ${TOTAL} \
+            --samples ${{ inputs.samples }} \
+            --width ${{ inputs.width }} --height ${{ inputs.height }}
+          ls -l artifacts/frames
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sframes-${{ matrix.shard }}-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------- קידוד
+  mux:
+    needs: render
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sframes-*
+          merge-multiple: true
+          path: inbox
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: קידוד בענן
+        run: |
+          mkdir -p artifacts
+          N=$(ls inbox/frames/*.png 2>/dev/null | wc -l)
+          echo "פריימים שהגיעו: $N מתוך ${TOTAL}"
+          echo "{\"frames_arrived\": $N, \"frames_expected\": ${TOTAL}, \"audio\": false}" \
+            > artifacts/mux.json
+          test "$N" -ge 1
+          # ללא שמע בכלל - לא ``-an`` על קלט שאינו קיים, אלא
+          # פשוט קלט אחד.
+          ffmpeg -y -framerate 24 -start_number 1 \
+            -i inbox/frames/f%04d.png \
+            -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p \
+            artifacts/beach_studio.mp4
+          cp inbox/frames/f0001.png artifacts/beach_studio_master.png || true
+          cp inbox/studio_meta.json artifacts/ 2>/dev/null || true
+          ls -l artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beach-studio-${{ inputs.ticket }}
+          path: artifacts/
+          if-no-files-found: warn
