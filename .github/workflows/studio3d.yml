@@ -214,6 +214,7 @@ jobs:
             artifacts/beach_studio.mp4
           cp inbox/frames/f0001.png artifacts/beach_studio_master.png || true
           cp inbox/studio_meta.json artifacts/ 2>/dev/null || true
+          cp inbox/studio_cast.glb artifacts/ 2>/dev/null || true
           ls -l artifacts
       - uses: actions/upload-artifact@v4
         if: always()
