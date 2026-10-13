@@ -455,12 +455,24 @@ def hair_material(name: str, col):
                  ("Radial Roughness", 0.42)):
         if k in h.inputs:
             h.inputs[k].default_value = v
-    # וריאציית גוון בין גדיל לגדיל: בלי זה השיער הוא גוש אחד.
-    ri = nt.nodes.new("ShaderNodeObjectInfo")
-    ri.location = (-300, -200)
+    # וריאציית גוון בין גדיל לגדיל: בלי זה השיער קורא כגוש אחד
+    # צבוע. ``Random`` של Hair Info הוא ערך קבוע לכל גדיל, ולכן
+    # הוא מפזר את הגוון בין גדילים ולא לאורך גדיל - וזה ההבדל
+    # בין שיער לצבע.
+    hi = nt.nodes.new("ShaderNodeHairInfo")
+    hi.location = (-520, -200)
     hv = nt.nodes.new("ShaderNodeHueSaturation")
-    hv.location = (0, -200)
-    hv.inputs["Hue"].default_value = 0.5
+    hv.location = (-150, -60)
+    hv.inputs["Color"].default_value = (*col, 1.0)
+    mr = nt.nodes.new("ShaderNodeMapRange")
+    mr.location = (-330, -200)
+    mr.inputs["To Min"].default_value = 0.455
+    mr.inputs["To Max"].default_value = 0.545
+    if "Random" in hi.outputs:
+        nt.links.new(hi.outputs["Random"], mr.inputs["Value"])
+        nt.links.new(mr.outputs["Result"], hv.inputs["Hue"])
+        if "Color" in h.inputs:
+            nt.links.new(hv.outputs["Color"], h.inputs["Color"])
     nt.links.new(h.outputs[0], out.inputs["Surface"])
     return mat
 
@@ -785,9 +797,10 @@ def fit_camera(obs, lens=62.0, margin=0.10, w=960, h=540):
     dist = max(dz, dx) + (hi.y - lo.y) * 0.5 + 0.25
     cam.location = (ctr.x + 0.10, ctr.y - dist, ctr.z + 0.045)
     cam.rotation_euler = (math.radians(90.0), 0.0, 0.0)
-    cam_d.dof.use_dof = True
-    cam_d.dof.focus_distance = dist
-    cam_d.dof.aperture_fsize = 4.0
+    # ``aperture_fsize`` הוא שם מ-2.7x. ב-2.8+ זה ``aperture_fstop``,
+    # ולכן ההצבה עוברת דרך ``_set`` ולא נופלת על שם.
+    _set(cam_d.dof, use_dof=True, focus_distance=dist,
+         aperture_fstop=4.0, aperture_blades=7)
     log("מצלמה: מרחק %.2fמ · עדשה %.0fמ\"מ · קאדר %.2f×%.2fמ"
         % (dist, lens, bw, bh))
     return cam, dist, ctr
@@ -836,26 +849,20 @@ def build(a):
     wipe()
     sc = bpy.context.scene
     sc.render.engine = "CYCLES"
-    sc.cycles.device = "CPU"
-    sc.cycles.samples = a.samples
-    sc.cycles.use_adaptive_sampling = True
-    sc.cycles.adaptive_threshold = 0.010
-    sc.cycles.use_denoising = True
-    try:
-        sc.cycles.denoiser = "OPENIMAGEDENOISE"
-        # ``denoising_prefilter`` ברירת המחדל מרככת פירוט דק
-        # (שיער!). ACCURATE שומר אותו, ובדיוק זה מה שנמדד.
-        sc.cycles.denoising_prefilter = "ACCURATE"
-    except Exception:                                        # noqa: BLE001
-        pass
-    sc.cycles.max_bounces = 6
-    sc.cycles.transmission_bounces = 3
-    sc.cycles.caustics_reflective = False
-    sc.cycles.caustics_refractive = False
-    sc.cycles.use_fast_gi = True
-    sc.render.film_transparent = False
-    sc.render.image_settings.file_format = "PNG"
-    sc.render.image_settings.compression = 15
+    # הכול דרך ``_set``: שמות ההגדרות של Cycles זזו בין 3.x ל-4.x
+    # (``denoising_prefilter``, ``use_fast_gi``), וריצה שנפלה על
+    # שם הגדרה היא 50 שניות ענן ועוד סבב שלם של דחיפה.
+    # ``denoising_prefilter=ACCURATE`` אינו קוסמטיקה: ברירת המחדל
+    # מרככת פירוט בתדר גבוה - כלומר בדיוק את השיער - וזה מה
+    # שנמדד ב-``sharp_detail``.
+    _set(sc.cycles, device="CPU", samples=a.samples,
+         use_adaptive_sampling=True, adaptive_threshold=0.010,
+         use_denoising=True, denoiser="OPENIMAGEDENOISE",
+         denoising_prefilter="ACCURATE", max_bounces=6,
+         transmission_bounces=3, caustics_reflective=False,
+         caustics_refractive=False, use_fast_gi=True)
+    _set(sc.render, film_transparent=False, filter_size=1.20)
+    _set(sc.render.image_settings, file_format="PNG", compression=15)
     sc.view_settings.view_transform = "AgX"
     for look in ("AgX - Medium High Contrast", "AgX - Base Contrast",
                  "AgX - Punchy", "None"):
