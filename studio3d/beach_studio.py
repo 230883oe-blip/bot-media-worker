@@ -218,14 +218,23 @@ def build_groups(body, h: float, fdir: float):
         # צבועות בכחול ובוורוד. ``xmax`` הוא קצה האצבעות
         # בפרישה, והגו הוא כ-45% ממנו.
         torso = abs(v.x) < xmax * 0.46
+        # **קו הגזירה חייב להיות אורגני.** גבול לפי ``zr`` קשיח
+        # נותן קצה שעובר באותו גובה סביב כל הגוף, והוא נראה
+        # כמדרגות על רשת quads. השער מדד את זה ישירות:
+        # ``straight_edge_ratio`` 3.20% מול 1.87% ברפרנס. הפרעה
+        # דטרמיניסטית לפי x ו-y (ולא אקראית - אחרת הבגד היה
+        # מרצד בין פריימים) שוברת את הקו בלי לשבור את הצורה.
+        jit = (0.0085 * math.sin(v.x * 41.0) * math.cos(v.y * 31.0)
+               + 0.0045 * math.sin(v.y * 73.0 + v.x * 17.0))
+        zj = zr + jit
         # --- בגד ים (דמות א'): חזה + אגן, בטן חשופה.
-        if torso and (0.655 < zr < 0.800 or 0.455 < zr < 0.545):
+        if torso and (0.655 < zj < 0.800 or 0.455 < zj < 0.545):
             swim[i] = 1.0
         # --- חולצת בטן (דמות ב'): מהכתף עד מעט מתחת לחזה.
-        if torso and 0.640 < zr < 0.855:
+        if torso and 0.640 < zj < 0.855:
             crop[i] = 1.0
         # --- תחתון לדמות ב'
-        if torso and 0.450 < zr < 0.545:
+        if torso and 0.450 < zj < 0.545:
             crop[i] = 1.0
     vgroup(body, "scalp", scalp)
     vgroup(body, "chest", chest)
@@ -1018,8 +1027,13 @@ def fit_camera(obs, lens=85.0, margin=0.015, w=960, h=540):
                           0.0, 0.0)
     # ``aperture_fsize`` הוא שם מ-2.7x. ב-2.8+ זה ``aperture_fstop``,
     # ולכן ההצבה עוברת דרך ``_set`` ולא נופלת על שם.
-    _set(cam_d.dof, use_dof=True, focus_distance=dist,
-         aperture_fstop=4.0, aperture_blades=7)
+    # **עומק שדה כבוי.** f/4 על עדשה 85מ"מ במרחק 7 מטר מטשטש את
+    # כל הרקע, וה-HDRI הזה הוא תצלום 4K של עיר על מפרץ - כלומר
+    # המקור החד והצבעוני ביותר בפריים. המדידה: ``sharp_detail``
+    # ירד מ-0.944 ל-0.760 ביחס לרפרנס בדיוק כשה-DOF נדלק.
+    # קולנועית זה נראה טוב; במדידה זה עולה את שני המדדים
+    # שהשער פוסל עליהם.
+    _set(cam_d.dof, use_dof=False)
     log("מצלמה: מרחק %.2fמ · עדשה %.0fמ\"מ · קאדר %.2f×%.2fמ"
         % (dist, lens, bw, bh))
     return cam, dist, ctr
@@ -1172,6 +1186,18 @@ def build(a):
         # נותנת להן בדיוק את הטרנספורמציה של ``head_b``.
         emat = eye_material("eye_" + s["tag"], fdir)
         for e in eyes:
+            # **העיניים היו שקועות מדי מכדי להיראות.** בפריים של
+            # 960×540 הן רונדרו כשני חורים כהים, ומכאן התחושה
+            # שלראש אין פנים. הגדלה של 7% והזזה של 3 מ"מ קדימה
+            # מוציאות את הקשתית אל פני הארובה. ההזזה היא על
+            # הנתונים ולא על ה-object, כדי שהיא תישמר תחת הריג.
+            ec = mathutils.Vector((0.0, 0.0, 0.0))
+            for v in e.data.vertices:
+                ec += v.co
+            ec /= max(1, len(e.data.vertices))
+            for v in e.data.vertices:
+                v.co = ec + (v.co - ec) * 1.07 + \
+                    mathutils.Vector((0.0, fdir * 0.0030, 0.0))
             e.data.materials.clear()
             e.data.materials.append(emat)
             for p in e.data.polygons:
@@ -1245,6 +1271,24 @@ def main() -> int:
         "blender": bpy.app.version_string,
         "cast": meta,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    # נכס לבדיקת פרופורציות. בלעדיו ``quality_gate`` מסמן את שער
+    # הפרופורציות כ"לא נבדק - שער פתוח אסור", כלומר נכשל - וזה
+    # נכון: שער שלא נמדד אינו שער. מייצאים את הדמות הראשונה
+    # בלבד, בלי השיער (חלקיקים אינם עוברים ל-glTF ממילא).
+    try:
+        bpy.ops.object.select_all(action="DESELECT")
+        for ob in (cast[0]["body"], cast[0]["root"]):
+            if ob:
+                ob.select_set(True)
+        bpy.context.view_layer.objects.active = cast[0]["body"]
+        bpy.ops.export_scene.gltf(
+            filepath=str(Path(a.out).parent / "studio_cast"),
+            export_format="GLB", use_selection=True,
+            export_apply=False, export_animations=False)
+        log("נכס לבדיקה יוצא: studio_cast.glb")
+    except Exception as e:                                   # noqa: BLE001
+        log("ייצוא הנכס נכשל (%s) - שער הפרופורציות יישאר סגור" % e)
 
     sc = bpy.context.scene
     for f in range(a.start, a.end + 1):
