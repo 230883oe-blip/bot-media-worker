@@ -648,7 +648,18 @@ def main() -> int:
     # AgX ולא Filmic: Filmic עם שמי Nishita החזיר פריים שרוף
     # לגמרי. AgX מגלגל את ההיילייטס במקום להצמיד אותם ללבן.
     sc.view_settings.view_transform = "AgX"
-    sc.view_settings.look = "AgX - Medium Contrast"
+    # שמות ה-``look`` משתנים בין גרסאות בלנדר. הגרסה הקודמת כאן
+    # כתבה "AgX - Medium Contrast" והפילה את הריצה: ב-4.2 הרשימה
+    # היא Base/Medium High/Medium Low ואין "Medium". לכן ניסיון
+    # לפי סדר העדפה ולא שם קשיח.
+    for look in ("AgX - Base Contrast", "AgX - Medium Low Contrast",
+                 "AgX - Low Contrast", "None"):
+        try:
+            sc.view_settings.look = look
+            log("  look: %s" % look)
+            break
+        except TypeError:
+            continue
     sc.view_settings.exposure = -0.35
 
     build_world()
