@@ -260,20 +260,51 @@ def foam_material():
 # ---------------------------------------------------------------- דמויות
 
 def import_char(glb: Path, tag: str):
-    """מחזיר ``(armature, mesh)``. ה-GLB מכיל רשת אחת ושלד אחד."""
+    """מחזיר ``(armature, [meshes], מלאי)``.
+
+    **התקלה שהקוד הזה נולד בה (13/10 17:25, נתפסה בענן).**
+    ה-GLB מכיל *רשת אחת* עם שלושה פרימיטיבים (עור, שיער, עין),
+    אבל מייבא ה-glTF של בלנדר **מפצל פרימיטיבים לאובייקטים
+    נפרדים**. הגרסה הראשונה כאן לקחה ``next(... type == "MESH")``,
+    כלומר אובייקט אחד מתוך שלושה - ובפועל אחד שהחזיר
+    ``material_slots`` ריק ו-``shape_keys is None``. התוצאה:
+    רנדר של דמויות אפורות בלי פנים ובלי פה, שבו **כל הפלט של
+    המודל של NVIDIA נזרק בשקט**. שום שלב לא כתב שגיאה.
+
+    לכן כאן: כל אובייקטי הרשת נלקחים, המלאי שלהם נרשם לדוח,
+    ושער מפורש נופל אם אין אף בלנדשייפ - כי "אין פה" אינו
+    תוצאה שמותר לה לעבור בשקט.
+    """
     before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=str(glb))
     new = [o for o in bpy.data.objects if o not in before]
     arm = next((o for o in new if o.type == "ARMATURE"), None)
-    mesh = next((o for o in new if o.type == "MESH"), None)
-    if not arm or not mesh:
-        raise SystemExit("ייבוא נכשל: שלד=%s רשת=%s" % (bool(arm), bool(mesh)))
+    meshes = [o for o in new if o.type == "MESH"]
+    if not arm or not meshes:
+        raise SystemExit("ייבוא נכשל: שלד=%s רשתות=%d"
+                         % (bool(arm), len(meshes)))
+    inv = []
+    for o in new:
+        if o.type != "MESH":
+            inv.append({"name": o.name, "type": o.type})
+            continue
+        sk = o.data.shape_keys
+        inv.append({"name": o.name, "type": "MESH",
+                    "verts": len(o.data.vertices),
+                    "polys": len(o.data.polygons),
+                    "materials": [s.material.name if s.material else None
+                                  for s in o.material_slots],
+                    "shape_keys": len(sk.key_blocks) if sk else 0})
+    for it in inv:
+        log("    מלאי %s" % json.dumps(it, ensure_ascii=False))
+    if not any(it.get("shape_keys") for it in inv):
+        raise SystemExit("אף רשת לא קיבלה בלנדשייפים - הפלט של A2F "
+                         "לא היה מחובר לשום דבר")
     for o in new:
         o.name = "%s_%s" % (tag, o.name)
-    for o in new:
         if o.parent is None:
             o.rotation_mode = "XYZ"
-    return arm, mesh
+    return arm, meshes, inv
 
 
 def bone(arm, name: str):
@@ -296,7 +327,7 @@ def set_rot(arm, name: str, x=0.0, y=0.0, z=0.0):
     return True
 
 
-def pose_arms(arm, mesh) -> dict:
+def pose_arms(arm, meshes) -> dict:
     """מוריד את הידיים - **במדידה ולא בניחוש**.
 
     הנכס מיוצא בפוזת A/T (מפתח ידיים 1.78 מ' על ציר X). כיוון
@@ -305,7 +336,7 @@ def pose_arms(arm, mesh) -> dict:
     שמצמצמת את המפתח. בלי זה היה 50% סיכוי לזרועות שמצביעות
     למעלה - תקלה שעוברת קומפילציה בשקט.
     """
-    base_lo, base_hi = world_bbox([mesh])
+    base_lo, base_hi = world_bbox(meshes)
     base_w = base_hi.x - base_lo.x
     best = (base_w, None, None)
     for ax in range(3):
@@ -316,7 +347,7 @@ def pose_arms(arm, mesh) -> dict:
                 v[ax] = 62.0 * s
                 set_rot(arm, nm, *v)
             bpy.context.view_layer.update()
-            lo, hi = world_bbox([mesh])
+            lo, hi = world_bbox(meshes)
             w = hi.x - lo.x
             if w < best[0]:
                 best = (w, ax, sg)
@@ -333,7 +364,7 @@ def pose_arms(arm, mesh) -> dict:
         v[ax] = ang * s
         set_rot(arm, nm, *v)
     bpy.context.view_layer.update()
-    lo, hi = world_bbox([mesh])
+    lo, hi = world_bbox(meshes)
     log("  ידיים: מפתח %.2f -> %.2f מ' (ציר %d, סימן %+.0f)"
         % (base_w, hi.x - lo.x, ax, sg))
     return {"arms_posed": True, "axis": ax, "sign": sg,
@@ -341,14 +372,15 @@ def pose_arms(arm, mesh) -> dict:
             "span_after": round(float(hi.x - lo.x), 3)}
 
 
-def recolor(mesh, skin, hair, eye_dark: bool = False):
+def recolor(meshes, skin, hair, eye_dark: bool = False):
     """מעתיק את החומרים ומחליף צבע בסיס - שתי דמויות נפרדות.
 
     בלי העתקה, שינוי על הדמות השנייה היה משנה גם את הראשונה:
     ``import_scene.gltf`` מאחד חומרים בעלי אותו שם.
     """
     got = []
-    for i, sl in enumerate(mesh.material_slots):
+    slots = [(m, sl) for m in meshes for sl in m.material_slots]
+    for m_ob, sl in slots:
         if not sl.material:
             continue
         m = sl.material.copy()
@@ -375,16 +407,17 @@ def recolor(mesh, skin, hair, eye_dark: bool = False):
     return got
 
 
-def identity_morphs(mesh, offs: dict):
+def identity_morphs(meshes, offs: dict):
     """הטיית זהות קבועה דרך הבלנדשייפים - שתי פנים ולא אחת."""
-    kb = mesh.data.shape_keys
-    if not kb:
-        return 0
     n = 0
-    for k, v in offs.items():
-        if k in kb.key_blocks:
-            kb.key_blocks[k].value = float(v)
-            n += 1
+    for mesh in meshes:
+        kb = mesh.data.shape_keys
+        if not kb:
+            continue
+        for k, v in offs.items():
+            if k in kb.key_blocks:
+                kb.key_blocks[k].value = float(v)
+                n += 1
     return n
 
 
@@ -477,12 +510,16 @@ def apply_frame(cast, arkit, frame: int, total: int, waves, foam):
     nmi = {n: i for i, n in enumerate(arkit["names"])}
 
     for ci, c in enumerate(cast):
-        arm, mesh = c["arm"], c["mesh"]
-        kb = mesh.data.shape_keys
+        arm = c["arm"]
         speaks = c["speaks"]
 
-        # --- פה: NVIDIA Audio2Face על הדוברת, מנוחה על המאזינה
-        if kb:
+        # --- פה: NVIDIA Audio2Face על הדוברת, מנוחה על המאזינה.
+        # הלולאה היא על **כל** אובייקטי הרשת: מייבא ה-glTF מפצל
+        # את הדמות לפרימיטיבים, והבלנדשייפים יושבים על חלקם.
+        for mesh in c["meshes"]:
+            kb = mesh.data.shape_keys
+            if not kb:
+                continue
             for k, v in c["ident"].items():
                 if k in kb.key_blocks:
                     kb.key_blocks[k].value = float(v)
@@ -604,26 +641,28 @@ def main() -> int:
     ]
     cast, info = [], []
     for s in specs:
-        arm, mesh = import_char(glb, s["tag"])
+        arm, meshes, inv = import_char(glb, s["tag"])
         arm.location = (s["x"], s["y"], 0.0)
         arm.scale = (s["scale"],) * 3
         arm.rotation_euler = (0.0, 0.0,
                               math.radians(-9.0 if s["speaks"] else 9.0))
         bpy.context.view_layer.update()
-        pa = pose_arms(arm, mesh)
-        mats = recolor(mesh, s["skin"], s["hair"], s["eye_dark"])
-        nm = identity_morphs(mesh, s["ident"])
-        cast.append({"arm": arm, "mesh": mesh, "x": s["x"], "y": s["y"],
+        pa = pose_arms(arm, meshes)
+        mats = recolor(meshes, s["skin"], s["hair"], s["eye_dark"])
+        nm = identity_morphs(meshes, s["ident"])
+        sk = sum(len(m.data.shape_keys.key_blocks) for m in meshes
+                 if m.data.shape_keys)
+        cast.append({"arm": arm, "meshes": meshes, "x": s["x"], "y": s["y"],
                      "speaks": s["speaks"], "ident": s["ident"]})
         info.append({"tag": s["tag"], "scale": s["scale"], "arms": pa,
                      "materials": mats, "identity_morphs": nm,
-                     "shape_keys": len(mesh.data.shape_keys.key_blocks)
-                     if mesh.data.shape_keys else 0})
-        log("  %s: %d בלנדשייפים · %d הטיות זהות · חומרים %s"
-            % (s["tag"], info[-1]["shape_keys"], nm, mats))
+                     "meshes": len(meshes), "shape_keys": sk,
+                     "inventory": inv})
+        log("  %s: %d רשתות · %d בלנדשייפים · %d הטיות זהות · חומרים %s"
+            % (s["tag"], len(meshes), sk, nm, mats))
 
     apply_frame(cast, arkit, 1, a.total, waves, foam)
-    camf = fit_camera([c["mesh"] for c in cast],
+    camf = fit_camera([m for c in cast for m in c["meshes"]],
                       res=(a.width, a.height))
 
     outdir = Path(a.out)
