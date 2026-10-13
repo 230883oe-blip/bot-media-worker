@@ -527,7 +527,7 @@ def _set(obj, **kw):
     return missing
 
 
-def add_hair(body, length: float, col, count=2600, children=9000):
+def add_hair(body, length: float, col, count=3200, children=8):
     """שיער כגאומטריה, לא כמשטח מוצק.
 
     מערכת חלקיקים ולא Curves: ב-4.2 ``curves_empty_hair_add`` דורש
@@ -538,6 +538,14 @@ def add_hair(body, length: float, col, count=2600, children=9000):
     ``hair_length`` נשאר בינוני-קצר בכוונה: בלי סימולציית כבידה
     גדיל ארוך צומח לפי הנורמל ונותן "קיפוד". עם clump ו-kink,
     אורך 12-18 ס"מ קורא כשיער צמוד ואסוף.
+
+    **``children`` הוא מספר הבנים לכל אם, לא סך הגדילים.** זה
+    הפיל את הריצה 38464421809 ב-OOM (exit 137): 2600 אמהות ×
+    9000 "בנים" הם 23.4 מיליון גדילים × 6 נקודות ≈ 140 מיליון
+    נקודות, והרנר (16GB) נהרג בשלב בניית ה-BVH - אחרי שכל
+    הסצנה כבר נבנתה בהצלחה, ולכן זה נראה כמו תקלת רינדור
+    ולא כמו מספר שגוי. 3200 × 8 = 25,600 גדילים, שזה סדר הגודל
+    שראש מרונדר באמת צריך.
     """
     md = body.modifiers.new("hair", "PARTICLE_SYSTEM")
     ps = body.particle_systems[-1]
@@ -545,7 +553,7 @@ def add_hair(body, length: float, col, count=2600, children=9000):
     s = ps.settings
     _set(s, type="HAIR", count=count, hair_length=length, hair_step=6,
          use_hair_bspline=True, child_type="INTERPOLATED",
-         rendered_child_count=children, child_percent=24,
+         rendered_child_count=children, child_percent=max(2, children // 2),
          child_length=0.95, child_radius=0.030,
          clump_factor=0.62, clump_shape=0.22,
          roughness_1=0.012, roughness_1_size=0.06,
@@ -559,7 +567,8 @@ def add_hair(body, length: float, col, count=2600, children=9000):
     mi = len(body.data.materials)
     body.data.materials.append(hair_material("hair_" + body.name, col))
     s.material = mi + 1
-    log("  שיער: %d גדילים × %d בנים, אורך %.2fמ" % (count, children, length))
+    log("  שיער: %d אמהות × %d בנים = %d גדילים, אורך %.2fמ"
+        % (count, children, count * children, length))
     return md
 
 
