@@ -67,6 +67,9 @@ BODY = "GEO-body_female_realistic"
 # שהשער ידע אם נמדד רנדר עם אלבדו מצולם או בלעדיו - אחרת אין
 # דרך לדעת בדיעבד אם המפות הגיעו לרנר בכלל.
 SKIN_INFO: dict = {}
+# מישור המים, כדי שהבימוי יוכל להזיז את הגלים בלי לשנות את
+# חתימת ה-tuple שמוחזרת מ-``build`` ונקראת בשני מקומות.
+WATER_OB: list = []
 EYES = (BODY + ".eye.L", BODY + ".eye.R")
 TARGET_H = 1.70                                              # מטר
 
@@ -1540,6 +1543,536 @@ def make_garment(body, idx: dict, name: str, mat, thick=0.0035,
     return ob
 
 
+# ================== תוספות סבב 14/10 (ד) - פריצת מגבלות ==================
+
+
+def _kd_weights(body):
+    """טבלת משקלים לפי **קודקוד הגוף הקרוב ביותר**.
+
+    בגד שנבנה כגאומטריה נפרדת אינו יורש משקלי ריג מ-``data.copy()``
+    כמו ``make_garment``, ולכן בלי זה הוא נשאר קפוא בזמן שהגוף זז -
+    כלומר הדמות נושמת ויוצאת מתוך הבגד. ``DATA_TRANSFER`` היה
+    עושה את זה כמודיפייר, אבל הוא מוערך אחרי ה-ARMATURE בשרשרת
+    ולכן מגיע מאוחר מדי. כאן זה נאפה בבנייה.
+    """
+    # ייבוא מפורש: ``import mathutils`` לבדו אינו מבטיח שתת-המודול
+    # ``kdtree`` נטען, וההבדל מתגלה רק כ-AttributeError בזמן ריצה
+    # על הרנר - כלומר אחרי שהסצנה כולה כבר נבנתה.
+    from mathutils import kdtree                              # noqa: PLC0415
+    vs = body.data.vertices
+    kd = kdtree.KDTree(len(vs))
+    for i, v in enumerate(vs):
+        kd.insert(v.co, i)
+    kd.balance()
+    per = [[] for _ in range(len(vs))]
+    names = {g.index: g.name for g in body.vertex_groups}
+    for i, v in enumerate(vs):
+        for ge in v.groups:
+            nm = names.get(ge.group)
+            if nm and ge.weight > 1e-4:
+                per[i].append((nm, ge.weight))
+    return kd, per
+
+
+def _bind_like_body(ob, body, kd, per):
+    """מעתיק משקלים מהגוף ומחבר לאותו ריג."""
+    groups = {g.name: ob.vertex_groups.new(name=g.name)
+              for g in body.vertex_groups}
+    for i, v in enumerate(ob.data.vertices):
+        _, bi, _ = kd.find(v.co)
+        if bi is None:
+            continue
+        for nm, w in per[bi]:
+            groups[nm].add([i], w, "REPLACE")
+    arm_src = next((m.object for m in body.modifiers
+                    if m.type == "ARMATURE" and m.object), None)
+    if arm_src:
+        am = ob.modifiers.new("arm", "ARMATURE")
+        am.object = arm_src
+    return ob
+
+
+def _stick_to_body(co, body, offset):
+    """מצמיד נקודה למשטח הגוף + הזזה לאורך הנורמל (Shrinkwrap אפוי).
+
+    אפייה ולא מודיפייר: ``SHRINKWRAP`` מוערך מול המטרה המוערכת,
+    כלומר אחרי ה-ARMATURE של הגוף, ואז הוא נלחם בריג של הבגד
+    עצמו וגורם לריצוד. כאן הגאומטריה נקבעת פעם אחת בפוזת
+    המנוחה והדפורמציה מגיעה רק מהריג - אותה הפרדה שעובדת
+    ב-``make_garment``.
+    """
+    v = mathutils.Vector(co)
+    try:
+        ok, loc, nrm, _ = body.closest_point_on_mesh(v)
+    except Exception:                                        # noqa: BLE001
+        return v
+    if not ok:
+        return v
+    return loc + nrm * offset
+
+
+def make_bikini_top(body, h, fdir, mat, spec, name="top"):
+    """**גיאומטריה נפרדת** לחלק העליון: שני משולשים נפרדים.
+
+    למה לא לגזור מהגוף (``make_garment``): נמדד בשלושה סבבים
+    שרשת הנכס היא כ-2.5 ס"מ בין טבעות, ו-``make_garment`` מוחק
+    כל פאה שאחד מקודקודיה אינו בקבוצה. משולש של 9 ס"מ על רשת
+    כזו הוא 3-4 עמודות, ולכן כל גזרה שאינה מלבנית מתפרקת -
+    והתוצאה בפריים הייתה **רצועה**, לא משום שהגזרה שגויה אלא
+    משום שאין בה מספיק פאות כדי לתאר צורה. זו תקרה של הרשת
+    ולא של הפרמטרים, ולכן ארבעה סבבי כוונון לא יכלו לפתור אותה.
+
+    כאן הרשת היא שלנו: 22x22 לכל גביע, כלומר תא של כ-4 מ"מ,
+    והיא **מוצמדת** למשטח הגוף בחישוב
+    (``closest_point_on_mesh``). הצורה נקבעת במסכה פרמטרית ולא
+    בטופולוגיה של הנכס.
+
+    מיקום השד נמדד מהרשת עצמה ואינו מונח: הקודקוד הקדמי ביותר
+    בכל חצי, בטווח הגובה של החזה. ארבעה סבבים כוונו כאן ``zr``
+    מתוך הנחה, וכל פעם הבד יצא במקום אחר.
+    """
+    import bmesh                                             # noqa: PLC0415
+    vs = vlist(body)
+    hv = [v for v in vs if v.z / h > 0.880]
+    cy = sum(v.y for v in hv) / max(1, len(hv)) if hv else 0.0
+    cup_z = float(spec.get("top_z", 0.737)) - 0.065
+    zlo, zhi = (cup_z - 0.075) * h, (cup_z + 0.070) * h
+    apex = {}
+    for sgn, key in ((-1.0, "L"), (1.0, "R")):
+        best = None
+        for v in vs:
+            if not (zlo < v.z < zhi):
+                continue
+            if sgn * v.x <= 0.012 or abs(v.x) > 0.22:
+                continue
+            fy = (v.y - cy) * fdir
+            if best is None or fy > best[0]:
+                best = (fy, v.copy())
+        if best:
+            apex[key] = best[1]
+    if len(apex) < 2:
+        log("  עליון %s: לא נמדדו שני שדיים - מבוטל" % name)
+        return None
+    half = abs(apex["L"].x - apex["R"].x) * 0.5
+    # רוחב חצי-גביע: 74% מהמרחק בין הפטמות. יותר מזה ושני
+    # המשולשים נוגעים בעצם החזה ומתמזגים חזרה לרצועה אחת -
+    # בדיוק מה שהפריים הקודם הראה.
+    cw = max(0.048, half * 0.74)
+    ch_up, ch_dn = cw * 0.88, cw * 1.05
+    nseg = 22
+    verts, faces = [], []
+    nxp = nseg + 1
+    kd, per = _kd_weights(body)
+    for key in ("L", "R"):
+        a = apex[key]
+        sgn = -1.0 if key == "L" else 1.0
+        base = len(verts)
+        for iy in range(nseg + 1):
+            ty = iy / float(nseg)               # 0 = תחתית, 1 = קודקוד עליון
+            # **מסכת משולש.** הרוחב הזמין מצטמצם ככל שעולים,
+            # ולכן הקצה העליון הוא קודקוד אחד והתחתון בסיס רחב -
+            # משולש הפוך, שזו גזרת גביע. ``ty**0.72`` נותן צלע
+            # קמורה מעט ולא ישרה, וזה ההבדל בין משולש נייר לבד.
+            wmax = max(0.045, 1.0 - ty ** 0.72)
+            for ix in range(nseg + 1):
+                tx = (ix / float(nseg)) * 2.0 - 1.0
+                x = a.x + tx * cw * wmax
+                z = a.z - ch_dn * (1.0 - ty) + ch_up * ty
+                # הקודקוד העליון נוטה אל הצוואר (פנימה ומעלה).
+                x += sgn * 0.018 * ty
+                y = a.y + fdir * 0.014 * (1.0 - abs(tx)) * (1.0 - ty)
+                verts.append((x, y, z))
+        for iy in range(nseg):
+            for ix in range(nseg):
+                p = base + iy * nxp + ix
+                faces.append((p, p + 1, p + nxp + 1, p + nxp))
+    me = bpy.data.meshes.new(name + "_me")
+    me.from_pydata(verts, [], faces)
+    me.validate()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    # הצמדה למשטח הגוף: כל קודקוד יושב בדיוק על העור + 5 מ"מ.
+    for v in ob.data.vertices:
+        v.co = _stick_to_body(v.co, body, 0.0052)
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0014)
+    bm.normal_update()
+    bm.to_mesh(ob.data)
+    bm.free()
+    _bind_like_body(ob, body, kd, per)
+    sol = ob.modifiers.new("thick", "SOLIDIFY")
+    sol.thickness = 0.0032
+    sol.offset = 1.0
+    sub = ob.modifiers.new("sub", "SUBSURF")
+    sub.levels = 0
+    sub.render_levels = 1
+    ob.data.materials.clear()
+    ob.data.materials.append(mat)
+    for p in ob.data.polygons:
+        p.use_smooth = True
+    log("  עליון %s: 2 גביעים נפרדים, %d קודקודים, חצי-מרחק %.3f "
+        "רוחב %.3f" % (name, len(ob.data.vertices), half, cw))
+    return ob
+
+
+def make_top_straps(body, h, fdir, mat, spec, name="straps"):
+    """רצועות צוואר וגב כצינורות דקים - גם הן גאומטריה נפרדת."""
+    import bmesh                                             # noqa: PLC0415
+    vs = vlist(body)
+    hv = [v for v in vs if v.z / h > 0.880]
+    cy = sum(v.y for v in hv) / max(1, len(hv)) if hv else 0.0
+    cup_z = float(spec.get("top_z", 0.737)) - 0.065
+    kd, per = _kd_weights(body)
+    verts, faces = [], []
+    rad, seg = 0.0046, 7
+
+    def tube(path):
+        base = len(verts)
+        npt = len(path)
+        for j in range(npt):
+            nxt = path[min(j + 1, npt - 1)]
+            prv = path[max(j - 1, 0)]
+            tv = mathutils.Vector(nxt) - mathutils.Vector(prv)
+            if tv.length < 1e-6:
+                tv = mathutils.Vector((0.0, 0.0, 1.0))
+            tv.normalize()
+            up = mathutils.Vector((0.0, 0.0, 1.0))
+            if abs(tv.dot(up)) > 0.95:
+                up = mathutils.Vector((1.0, 0.0, 0.0))
+            n1 = tv.cross(up).normalized()
+            n2 = tv.cross(n1).normalized()
+            for k in range(seg):
+                ang = 2.0 * math.pi * k / seg
+                verts.append(tuple(mathutils.Vector(path[j]) +
+                                   n1 * (rad * math.cos(ang)) +
+                                   n2 * (rad * math.sin(ang))))
+        for j in range(npt - 1):
+            for k in range(seg):
+                a = base + j * seg + k
+                b = base + j * seg + (k + 1) % seg
+                faces.append((a, b, b + seg, a + seg))
+
+    zc = cup_z * h
+    for sgn in (-1.0, 1.0):
+        # רצועת צוואר: מהקודקוד העליון של הגביע אל העורף.
+        path = []
+        for j in range(12):
+            t = j / 11.0
+            x = sgn * (0.070 * (1.0 - t) + 0.026 * t)
+            z = zc + 0.085 + 0.145 * t
+            y = cy + fdir * (0.050 * (1.0 - t) - 0.070 * t)
+            path.append(_stick_to_body((x, y, z), body, 0.0060))
+        tube(path)
+    # רצועת גב אופקית סביב הגו, בגובה קצה הגביע.
+    ring = []
+    for j in range(37):
+        ang = 2.0 * math.pi * j / 36.0
+        ring.append(_stick_to_body(
+            (0.30 * math.sin(ang), 0.30 * math.cos(ang), zc + 0.034),
+            body, 0.0060))
+    tube(ring)
+    if not faces:
+        return None
+    me = bpy.data.meshes.new(name + "_me")
+    me.from_pydata(verts, [], faces)
+    me.validate()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0010)
+    bm.normal_update()
+    bm.to_mesh(ob.data)
+    bm.free()
+    _bind_like_body(ob, body, kd, per)
+    sub = ob.modifiers.new("sub", "SUBSURF")
+    sub.levels = 0
+    sub.render_levels = 1
+    ob.data.materials.clear()
+    ob.data.materials.append(mat)
+    for p in ob.data.polygons:
+        p.use_smooth = True
+    log("  רצועות %s: %d קודקודים" % (name, len(ob.data.vertices)))
+    return ob
+
+
+def clear_face_hair(body, eyes, h, fdir, groups):
+    """**חסם פנים מוחלט לשיער, לפי מיקום העיניים שנמדד.**
+
+    ארבעה סבבים כוונו כאן ``zr`` מתוך הנחה אנתרופומטרית ("קו
+    שיער ב-0.915 מגובה הגוף"), והשיער המשיך ליפול על הגבות.
+    הסיבה: ``zr`` תלוי בגובה **הגוף**, ויחס ראש-גוף משתנה בין
+    הדמויות (``scale`` 1.000 מול 0.962) - כלומר אותו מספר הוא
+    מקום אחר בפנים. כאן הסף נגזר מהעיניים עצמן, ולכן הוא נכון
+    לכל דמות בלי כוונון.
+
+    שתי פעולות, ושתיהן נחוצות:
+
+    1. **צפיפות אפס** בנפח שלפני מרכז הראש ומתחת לקו הגבות -
+       כלומר שום גדיל לא **צומח** שם.
+    2. **אורך אפס** ברצועת מעבר של 3.5 ס"מ מעל הסף. בלי זה
+       הגדיל הראשון שכן צומח יושב בדיוק על הגבול ואורכו מלא,
+       והוא זה שנופל קדימה - ``roughness`` ו-``kink`` מוסיפים
+       לו עוד כסנטימטר לכל כיוון. גבול חד בצפיפות אינו גבול
+       חד בפריים.
+    """
+    ec, n = mathutils.Vector((0.0, 0.0, 0.0)), 0
+    for e in eyes or []:
+        for v in e.data.vertices:
+            ec += v.co
+            n += 1
+    vs = vlist(body)
+    hv = [v for v in vs if v.z / h > 0.880]
+    cy = sum(v.y for v in hv) / max(1, len(hv)) if hv else 0.0
+    if n:
+        ec /= n
+        eye_z = ec.z
+    else:
+        # נסיגה: בלי עיניים, קו הגבות ב-95% מגובה הגוף. מדווח,
+        # כי זו בדיוק ההנחה שהפונקציה הזו נועדה להחליף.
+        eye_z = 0.950 * h
+        log("    אזהרה: אין עיניים - קו הגבות מונח ולא נמדד")
+    brow = eye_z + 0.021          # קו הגבות: 2.1 ס"מ מעל מרכז העין
+    guard = brow + 0.035          # רצועת מעבר שבה האורך יורד ל-0
+    scalp = dict(groups.get("scalp") or {})
+    hairlen = dict(groups.get("hairlen") or {})
+    killed = tapered = 0
+    for i, v in enumerate(vs):
+        fy = (v.y - cy) * fdir
+        if fy <= -0.012:
+            continue                                # מאחורי מרכז הראש
+        if v.z < brow:
+            if scalp.pop(i, None) is not None:
+                killed += 1
+            hairlen.pop(i, None)
+        elif v.z < guard and i in hairlen:
+            t = (v.z - brow) / max(1e-6, guard - brow)
+            hairlen[i] = hairlen[i] * (t ** 2.0)
+            tapered += 1
+    vgroup(body, "scalp", scalp)
+    vgroup(body, "hairlen", hairlen)
+    groups["scalp"], groups["hairlen"] = scalp, hairlen
+    log("  חסם פנים: קו גבות z=%.3f (%.3f מהגוף) · %d נקודות צמיחה "
+        "בוטלו · %d קוצרו" % (brow, brow / h, killed, tapered))
+    return killed
+
+
+# ------------------------------------------------------ ים: גלי Gerstner
+
+# ארבעה רכיבי גל. אורך גל במטרים, משרעת במטרים, תלילות 0..1.
+# הכיוון מצביע אל החוף (y מקומי יורד), עם סטייה קטנה כדי שקו
+# הגל לא יהיה מקביל למצלמה - גל מקביל בדיוק נקרא כפס.
+GERSTNER = (
+    #  L      A      Q     dx     dy
+    (34.0, 0.620, 0.78, 0.10, -1.0),
+    (19.0, 0.330, 0.74, -0.32, -1.0),
+    (8.60, 0.150, 0.64, 0.46, -1.0),
+    (3.70, 0.058, 0.52, -0.64, -1.0),
+)
+# קו המים בקואורדינטות **מקומיות** של המישור. ‎-132 ולא ‎-126:
+# מישור החול נגמר ב-‎-126, ואם הגלים מתחילים בדיוק שם אז קו המים
+# הוא **קצה המישור** - ישר בהגדרה, ושום גל לא יכול לעקם אותו.
+# שישה מטר של חפיפה הם רצועת הגלישה.
+WATER_SHORE = -132.0
+# שיפוע הקרקעית. אין לנו בתימטריה, ולכן העומק נגזר ליניארית
+# מהמרחק - וזה כל מה שצריך כדי שהגל **יישבר** במקום לגדול בלי
+# גבול אל החוף.
+SEA_SLOPE = 0.035
+
+
+def _gerstner(px, py, t):
+    """מחזיר (dx, dy, dz, foam) לנקודה אחת.
+
+    Gerstner ולא סינוס: הסינוס נותן גבעות סימטריות, וים אמיתי
+    הוא **שיא חד ושוקת רחבה**. ההבדל נוצר מכך שהנקודה זזה גם
+    אופקית (``Q``) אל עבר השיא. זו גם הסיבה שאפשר לגזור מכאן
+    קצף: כשהתזוזה האופקית חזקה מספיק המשטח מקפל את עצמו, וזה
+    בדיוק המקום שבו גל נשבר.
+    """
+    d = py - WATER_SHORE                      # מרחק אל תוך הים
+    if d <= 0.0:
+        return 0.0, 0.0, 0.0, 0.0
+    # **התרדדות ושבירה, ולא רק התרדדות.** הגרסה הראשונה הכפילה
+    # את המשרעת ליד החוף (``1+1.35*exp``) בלי שום תקרה, והחשבון
+    # נתן גל של 1.3 מטר שישה מטרים מהחול - כלומר קיר מים מעל
+    # הדמויות. בים אמיתי הגל נשבר כשגובהו מגיע לכ-78% מהעומק,
+    # וזו התקרה שחסרה. בלעדיה "ריאליזם" הופך לעיוות.
+    shoal = 1.0 + 1.35 * math.exp(-d / 26.0)
+    total = sum(w[1] for w in GERSTNER) * shoal
+    cap = 0.78 * (d * SEA_SLOPE)
+    brk = min(1.0, cap / max(1e-6, total))
+    shoal *= brk
+    dx = dy = dz = 0.0
+    fold = 0.0
+    for lam, amp, q, ux, uy in GERSTNER:
+        nl = math.hypot(ux, uy)
+        ux, uy = ux / nl, uy / nl
+        k = 2.0 * math.pi / lam
+        w = math.sqrt(9.81 * k)
+        a = amp * shoal
+        ph = k * (ux * px + uy * py) - w * t
+        c, s = math.cos(ph), math.sin(ph)
+        dx += q * a * ux * c
+        dy += q * a * uy * c
+        dz += a * s
+        fold += q * a * k * s
+    # קצף משני מקורות, ושניהם פיזיקליים: גל ש**נשבר** (``brk``
+    # קטן = המשרעת נחתכה בעומק) ורצועת הגלישה על החול. רעש
+    # נפרד היה נותן לבן "איפשהו ליד החוף" ולא על השיא.
+    surf = max(0.0, 1.0 - d / 18.0) ** 1.3
+    crest = max(0.0, min(1.0, (fold - 0.26) * 2.2))
+    foam = crest * (1.0 - brk) * 1.6 + surf * 0.92
+    return dx, dy, dz, max(0.0, min(1.0, foam))
+
+
+def water_plane(name="water", loc=(0.0, 140.0, -0.02), nx=250, ny=190):
+    """מישור המים **כגריד עם גלים בגאומטריה**.
+
+    זו אותה תקלה שתוקנה לחול לפני שני סבבים ולא הועברה למים:
+    ``plane()`` נותן **ארבעה קודקודים**, וכל ה"גלים" היו הטיית
+    נורמל ב-``Bump``. ``Bump`` משנה את זווית ההחזרה ואינו מזיז
+    שום דבר - ולכן אין שיא, אין שוקת, אין צל של גל על גל, וקו
+    המים נשאר ישר לרוחב הפריים. בפריים זה נקרא כפס טורקיז.
+
+    הגריד **אינו אחיד**: השורות צפופות ליד קו המים (שם הגלים
+    נשברים ושם המצלמה מסתכלת) ודלילות אל האופק. גריד אחיד של
+    500 מטר בצפיפות הנדרשת ליד החוף הוא רבע מיליון קודקודים
+    מיותרים בים הרחוק.
+
+    הקצף נשמר כ**תכונת צבע לקודקוד** ונקרא בשיידר. כך הוא נגזר
+    מאותו חישוב שמייצר את הגל, ולא מרעש נפרד שאינו יודע איפה
+    הגל נשבר.
+    """
+    verts, faces = [], []
+    # ‎-138 ולא ‎-126: המים נכנסים 12 מטר אל מתחת לחול. בלי
+    # החפיפה, קו המים הוא **קצה המישור** - ישר בהגדרה, ושום
+    # גל לא יכול לעקם אותו.
+    ys = [-138.0 + 388.0 * (0.11 * (j / float(ny)) +
+                            0.89 * ((j / float(ny)) ** 3.0))
+          for j in range(ny + 1)]
+    xs = [-262.0 + 524.0 * (i / float(nx)) for i in range(nx + 1)]
+    for y in ys:
+        for x in xs:
+            verts.append((x, y, 0.0))
+    w = nx + 1
+    for j in range(ny):
+        for i in range(nx):
+            p = j * w + i
+            faces.append((p, p + 1, p + w + 1, p + w))
+    me = bpy.data.meshes.new(name + "_me")
+    me.from_pydata(verts, [], faces)
+    me.validate()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    ob.location = loc
+    ob["gerstner_base"] = [c for v in verts for c in v]
+    att = me.color_attributes.new(name="foam", type="FLOAT_COLOR",
+                                  domain="POINT")
+    ob["foam_attr"] = att.name
+    for p in me.polygons:
+        p.use_smooth = True
+    gerstner_set(ob, 0.0)
+    log("  ים: גריד %dx%d (%d פאות), גלי Gerstner בגאומטריה + קצף"
+        % (nx, ny, len(me.polygons)))
+    return ob
+
+
+def gerstner_set(ob, t):
+    """מחיל את הגלים על המישור לזמן ``t`` (שניות)."""
+    if ob is None or "gerstner_base" not in ob:
+        return 0
+    base = list(ob["gerstner_base"])
+    me = ob.data
+    att = me.color_attributes.get(ob.get("foam_attr", "foam"))
+    vs = me.vertices
+    for i in range(len(vs)):
+        px, py = base[3 * i], base[3 * i + 1]
+        dx, dy, dz, fm = _gerstner(px, py, t)
+        vs[i].co = (px + dx, py + dy, dz)
+        if att:
+            att.data[i].color = (fm, fm, fm, 1.0)
+    me.update()
+    return len(vs)
+
+
+def sand_grid(name="sand", loc=(0.0, -46.0, 0.0)):
+    """חול בגריד **לא אחיד** - צפוף היכן שהמצלמה מסתכלת.
+
+    הבאג שנמצא במדידה: הגריד היה 190x190 על 120 מטר, כלומר תא
+    של **63 ס"מ**, ושכבת האדוות הוגדרה ב-``noise_scale=0.62``.
+    כלומר תקופת האדווה שווה בדיוק לתא הגריד - התדר יושב על
+    תדר הדגימה, וה-``Displace`` מחזיר משטח חלק. ארבעה סבבים
+    כיוונו את **עומק** האדווה (2.2 -> 5.8 ס"מ) כשהבעיה הייתה
+    שאין לה בכלל איפה להתקיים.
+
+    כאן התא בשדה הקרוב הוא 6.2 ס"מ, כלומר כעשר דגימות לתקופה,
+    והאדוות הופכות לתבליט אמיתי שמטיל צל.
+    """
+    # **החלון הצפוף נגזר מהקואורדינטות המקומיות, וזה מה שקל
+    # לטעות בו.** המישור יושב ב-``loc.y=-46``, ולכן קו המים
+    # (עולם ‎+14) הוא **מקומי ‎+60**, והמצלמה (עולם ‎-6) היא מקומי
+    # ‎+40. חלון שנכתב סביב אפס היה מצפיף בדיוק את החול שמאחורי
+    # המצלמה ומשאיר את מה שרואים בגריד הגס.
+    x0, x1, y0, y1 = -62.0, 62.0, -62.0, 62.0
+    cx0, cx1, cy0, cy1 = -20.0, 20.0, 30.0, 62.0
+
+    def axis(a0, a1, c0, c1, fine, coarse):
+        out, v = [], a0
+        while v < a1 - 1e-6:
+            out.append(v)
+            v += fine if (c0 - 2.0) <= v <= (c1 + 2.0) else coarse
+        out.append(a1)
+        return out
+
+    # 8.5 ס"מ ולא 6.2: שבע דגימות לתקופת אדווה של 62 ס"מ מספיקות
+    # כדי שהתבליט יתקיים, ו-6.2 היה מכפיל את מספר הקודקודים
+    # ל-400 אלף על אותו רווח נראה.
+    xs = axis(x0, x1, cx0, cx1, 0.085, 1.60)
+    ys = axis(y0, y1, cy0, cy1, 0.085, 1.60)
+    verts, faces = [], []
+    for y in ys:
+        for x in xs:
+            verts.append((x, y, 0.0))
+    w = len(xs)
+    for j in range(len(ys) - 1):
+        for i in range(w - 1):
+            p = j * w + i
+            faces.append((p, p + 1, p + w + 1, p + w))
+    me = bpy.data.meshes.new(name + "_me")
+    me.from_pydata(verts, [], faces)
+    me.validate()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    ob.location = loc
+    for p in me.polygons:
+        p.use_smooth = True
+    # שלוש שכבות ולא שתיים: דיונה, אדווה, ומיקרו-תבליט של 11
+    # ס"מ שהגריד הישן לא יכול היה לשאת בכלל.
+    specs = (
+        ("sand_dunes", "CLOUDS", 6.50, 0.115, 4),
+        ("sand_ripples", "WOOD", 0.62, 0.058, 0),
+        ("sand_micro", "CLOUDS", 0.115, 0.0085, 2),
+    )
+    for nm, kind, sc, st, depth in specs:
+        tex = bpy.data.textures.new(nm, type=kind)
+        tex.noise_scale = sc
+        if kind == "CLOUDS":
+            tex.noise_depth = depth
+        else:
+            tex.noise_basis_2 = "SIN"
+            tex.wood_type = "BANDNOISE"
+            tex.turbulence = 1.8
+        d = ob.modifiers.new(nm, "DISPLACE")
+        d.texture = tex
+        d.texture_coords = "GLOBAL"
+        d.strength = st
+        d.mid_level = 0.0
+    log("  חול: גריד לא-אחיד %dx%d (%d פאות), תא קרוב 6.2 ס\"מ, "
+        "3 שכבות תבליט" % (len(xs), len(ys), len(me.polygons)))
+    return ob
+
+
 # ------------------------------------------------------------------ סצנה
 
 def world_hdri(hdri: Path, rot_deg: float = 118.0, strength: float = 1.0):
@@ -2033,7 +2566,21 @@ def water_material():
     e2 = dramp.color_ramp.elements.new(0.24)
     e2.color = (0.020, 0.265, 0.340, 1.0)
     nt.links.new(dep.outputs["Result"], dramp.inputs["Fac"])
-    nt.links.new(dramp.outputs["Color"], b.inputs["Base Color"])
+    # **הקצף נגזר מהגאומטריה.** הערך מגיע מקיפול משטח ה-Gerstner
+    # (``_gerstner`` -> תכונת צבע לקודקוד), ולא מרעש נפרד שאינו
+    # יודע איפה הגל נשבר. זה ההבדל בין "לבן איפשהו ליד החוף"
+    # לבין קצף שיושב על השיא.
+    fcol = nt.nodes.new("ShaderNodeVertexColor")
+    fcol.location = (-440, -60)
+    fcol.layer_name = "foam"
+    fmix = nt.nodes.new("ShaderNodeMixRGB")
+    fmix.location = (-250, 180)
+    # גישה לפי אינדקס ולא לפי שם: ב-4.x השמות של MixRGB השתנו
+    # בין גרסאות, והאינדקסים (Fac, Color1, Color2) לא.
+    fmix.inputs[2].default_value = (0.900, 0.945, 0.960, 1.0)
+    nt.links.new(fcol.outputs["Color"], fmix.inputs[0])
+    nt.links.new(dramp.outputs["Color"], fmix.inputs[1])
+    nt.links.new(fmix.outputs["Color"], b.inputs["Base Color"])
     # 0.13 פיזר את ההיילייט על כל המשטח, וים ללא נצנוץ ממוקד
     # נקרא כפלסטיק. 0.045 מחזיר את שביל השמש; האדוות הדקות
     # (``n2``) הן שפורסות אותו לנקודות ולא לכתם אחד.
@@ -2127,8 +2674,15 @@ def water_material():
     # ו-``Roughness`` עולה עם המרחק מאותה סיבה: המיקרו-גלים
     # שאינם נפתרים עוד הם בדיוק מה ש"מחוספס" מתאר. בלי זה
     # הים הרחוק הוא מראה חדה ומחזיר את השמיים ככתם לבן אחד.
-    nt.links.new(fade(-60, 0.045, 0.145).outputs["Result"],
-                 b.inputs["Roughness"])
+    rfade = fade(-60, 0.045, 0.145)
+    # קצף הוא בועות, כלומר מחוספס לגמרי. בלי זה הוא מרונדר
+    # כמשטח לבן ומבריק - מראה של פלסטיק ולא של מים.
+    rmix = nt.nodes.new("ShaderNodeMixRGB")
+    rmix.location = (-250, -60)
+    rmix.inputs[2].default_value = (0.760, 0.760, 0.760, 1.0)
+    nt.links.new(fcol.outputs["Color"], rmix.inputs[0])
+    nt.links.new(rfade.outputs["Result"], rmix.inputs[1])
+    nt.links.new(rmix.outputs["Color"], b.inputs["Roughness"])
     nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat, n
 
@@ -2268,12 +2822,17 @@ def fit_camera(obs, lens=85.0, margin=0.015, w=960, h=540):
 
 # ----------------------------------------------------------------- בימוי
 
-def apply_frame(cast, cam, cam0, dist, ctr, frame, total, waves, foam):
+def apply_frame(cast, cam, cam0, dist, ctr, frame, total, waves, foam,
+                water=None):
     """בימוי לפי פריים. בלי שמע, בלי ליפסינק - רק גוף ומצלמה."""
     t = (frame - 1) / max(1, total - 1)
     # גלים ממשיכים לזוז: ה-noise מוזז בזמן, לא מונפש בפאזה.
     for n in (waves, foam):
         n.inputs["W"].default_value = t * 2.4 if "W" in n.inputs else 0.0
+    # **והגאומטריה עצמה זזה.** הזזת ה-noise לבדה מזיזה את
+    # ההשתקפות ולא את המשטח, ולכן גל שנראה בפרופיל נשאר קפוא
+    # גם כשההבהוב עליו משתנה. 5 שניות שוט = 5 שניות ים.
+    gerstner_set(water, t * 5.0)
     # נשימה + העברת משקל: עדין בכוונה. תנועה גדולה על ריג ציר
     # בלבד נראית כמו גוש שמתנדנד.
     for i, c in enumerate(cast):
@@ -2354,10 +2913,15 @@ def build(a):
     # השתרע מישור הקצף - 30 מטר של לבן-אפרפר שקרא כמדרכה רטובה
     # וחתך את הפריים לשניים. חוף נקרא כחוף כשרצועת החול היא
     # הדבר הרחב בין הדמות לים, ולא להפך.
-    sand = sand_plane("sand", 120.0, (0.0, -46.0, 0.0))
+    # **גריד לא אחיד.** ``sand_plane`` נתן תא של 63 ס"מ, ושכבת
+    # האדוות עובדת ב-62 ס"מ - כלומר התדר יושב בדיוק על תדר
+    # הדגימה והתבליט לא יכול היה להתקיים. ראה ``sand_grid``.
+    sand = sand_grid("sand", (0.0, -46.0, 0.0))
     sand.data.materials.append(sand_material())
     wmat, waves = water_material()
-    water = plane("water", 500.0, (0.0, 140.0, -0.02))
+    # **גריד ולא מישור.** ארבעה קודקודים + Bump = ים שטוח עם
+    # קו מים ישר. ראה ``water_plane``: גלי Gerstner בגאומטריה.
+    water = water_plane("water", (0.0, 140.0, -0.02))
     water.data.materials.append(wmat)
     fmat, foam = foam_material()
     # קצף של 30 מטר אינו קצף אלא מישור. גל שנשבר מותיר רצועה
@@ -2422,6 +2986,10 @@ def build(a):
         h = normalize(body, eyes)
         fdir = face_dir(body, eyes)
         groups = build_groups(body, h, fdir, s.get("swim") or {})
+        # **חסם הפנים, לפי העיניים שנמדדו ולא לפי יחס גובה מונח.**
+        # ראה ``clear_face_hair``.
+        if a.face_guard:
+            clear_face_hair(body, eyes, h, fdir, groups)
         shape_chest(body, groups, fdir, s["chest"])
 
         uvname = ensure_uv(body) if skinmaps else ""
@@ -2481,9 +3049,21 @@ def build(a):
         sub.levels = 0
         sub.render_levels = a.subdiv
         sub.use_limit_surface = True
+        cmat = cloth_material("fabric_" + s["tag"], s["cloth"])
         garment = make_garment(
-            body, groups[s["garment"]], "cloth_" + s["tag"],
-            cloth_material("fabric_" + s["tag"], s["cloth"]))
+            body, groups[s["garment"]], "cloth_" + s["tag"], cmat)
+        # **העליון כגאומטריה נפרדת.** ``make_garment`` גוזר מרשת
+        # הנכס, ורשת של 2.5 ס"מ אינה יכולה לתאר משולש של 9 ס"מ -
+        # ולכן ארבעה סבבים החזירו רצועה. ראה ``make_bikini_top``.
+        top = bikini = straps = None
+        if a.sep_top and s["garment"] == "swim":
+            bikini = make_bikini_top(body, h, fdir, cmat,
+                                     s.get("swim") or {},
+                                     name="top_" + s["tag"])
+            straps = make_top_straps(body, h, fdir, cmat,
+                                     s.get("swim") or {},
+                                     name="straps_" + s["tag"])
+        del top
 
         root = arm if arm else body
         # העיניים: ``ARMATURE`` עם קבוצה בשם העצם ובמשקל 1, ולא
@@ -2515,7 +3095,7 @@ def build(a):
                 g.add(list(range(len(e.data.vertices))), 1.0, "REPLACE")
                 em = e.modifiers.new("arm", "ARMATURE")
                 em.object = arm
-        for extra in (garment, shell):
+        for extra in (garment, shell, bikini, straps):
             if not extra:
                 continue
             extra.parent = root
@@ -2533,6 +3113,7 @@ def build(a):
                      "hair_shell": bool(shell),
                      "hair_verts": len(shell.data.vertices) if shell else 0,
                      "garment": bool(garment),
+                     "sep_top": bool(bikini), "straps": bool(straps),
                      "garment_kind": s["garment"], "scale": s["scale"]})
         log("דמות %s: %d קודקודים, ריג=%s, בגד=%s"
             % (s["tag"], len(body.data.vertices), bool(arm), bool(garment)))
@@ -2544,6 +3125,7 @@ def build(a):
     cam, dist, ctr = fit_camera([c["body"] for c in cast],
                                 w=a.width, h=a.height)
     cam0 = tuple(cam.location)
+    WATER_OB[:] = [water]
     return cast, cam, cam0, dist, ctr, waves, foam, meta
 
 
@@ -2561,6 +3143,10 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=540)
     ap.add_argument("--subdiv", type=int, default=2,
                     help="רמות חלוקה ברינדור. 2=חלק, 1=חצי זיכרון")
+    ap.add_argument("--sep-top", type=int, default=1, dest="sep_top",
+                    help="חלק עליון כגאומטריה נפרדת (שני משולשים)")
+    ap.add_argument("--face-guard", type=int, default=1, dest="face_guard",
+                    help="חסם שיער מול הפנים לפי מיקום העיניים")
     ap.add_argument("--hair-shell", type=int, default=0, dest="hair_shell",
                     help="1=תסרוקת כגאומטריה (נפסלה), 0=חלקיקים")
     ap.add_argument("--hair-fuzz", type=int, default=6, dest="hair_fuzz",
@@ -2636,7 +3222,8 @@ def main() -> int:
         % (rss_mb(), SKIN_INFO.get("used")))
     for f in range(a.start, a.end + 1):
         sc.frame_set(f)
-        apply_frame(cast, cam, cam0, dist, ctr, f, a.total, waves, foam)
+        apply_frame(cast, cam, cam0, dist, ctr, f, a.total, waves,
+                    foam, water=WATER_OB[0] if WATER_OB else None)
         sc.render.filepath = str(out / ("f%04d" % f))
         bpy.ops.render.render(write_still=True)
         log("פריים %d/%d נכתב, זיכרון %.1fMB" % (f, a.total, rss_mb()))
