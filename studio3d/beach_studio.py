@@ -943,8 +943,14 @@ def add_hair(body, length: float, col, count=4200, children=16):
     _set(s, type="HAIR", count=count, hair_length=length, hair_step=5,
          use_hair_bspline=True, child_type="INTERPOLATED",
          rendered_child_count=children, child_percent=max(2, children // 2),
-         child_length=0.92, child_radius=0.016,
-         clump_factor=0.93, clump_shape=0.52,
+         # **הנפח הכדורי הוא חשבון של אורך, לא של סגנון.** ראש
+         # הוא כדור ברדיוס 9 ס"מ, וגדיל שצומח 8 ס"מ לפי הנורמל
+         # בונה כדור של 17 ס"מ - כלומר אפרו, בדיוק מה שנמדד.
+         # ``child_length`` מקצר את הבנים ביחס לאמהות, ולכן
+         # המעטפת החיצונית (שהיא מה שהעין רואה) נדחסת פנימה
+         # בלי לדלל את השיער עצמו.
+         child_length=0.74, child_radius=0.013,
+         clump_factor=0.97, clump_shape=0.62,
          roughness_1=0.006, roughness_1_size=0.04,
          roughness_2=0.010, roughness_2_size=0.14,
          roughness_endpoint=0.004,
@@ -1112,7 +1118,14 @@ def sand_plane(name="sand", size=120.0, loc=(0.0, -55.0, 0.0), cuts=150):
     d.texture = tex
     d.texture_coords = "GLOBAL"
     d.strength = 0.115
-    d.mid_level = 0.5
+    # **``mid_level`` חייב להיות 0, לא 0.5.** עם 0.5 ההזזה היא
+    # ``strength*(tex-0.5)``, כלומר **חצי מהחול יורד מתחת
+    # לאפס** - ומישור המים יושב ב-``z=-0.02``. בפריים המבחן
+    # הראשון זה נראה כאילו החול "נעלם": רוב המישור שקע מתחת
+    # לפני הים ונותר כתם מוזהב בודד במקום שבו הדיונה הזדמנה
+    # לעלות. התקלה נראית כמו בעיית שיידר והיא בעיית גובה.
+    # עם 0, ההזזה היא ``strength*tex`` - תמיד כלפי מעלה.
+    d.mid_level = 0.0
     # שכבה שנייה, דקה וצפופה: אדוות הרוח. הן מה שהעין קוראת
     # כ"חול" ולא כ"אדמה", והן חייבות להיות בגאומטריה כי הכיווניות
     # שלהן יוצרת פס צל וpס אור לסירוגין מול שמש נמוכה.
@@ -1125,7 +1138,7 @@ def sand_plane(name="sand", size=120.0, loc=(0.0, -55.0, 0.0), cuts=150):
     d2.texture = tex2
     d2.texture_coords = "GLOBAL"
     d2.strength = 0.022
-    d2.mid_level = 0.5
+    d2.mid_level = 0.0
     for p in ob.data.polygons:
         p.use_smooth = True
     log("  חול: גריד %d×%d, %d פאות, דיונות+אדוות בגאומטריה"
@@ -1254,12 +1267,46 @@ def sand_material():
                 blend="SOFT_LIGHT", fac=0.34)
     nt.links.new(grain_r.outputs["Color"], g_mix.inputs["Color2"])
 
-    # --- 4. לחות. תקופה ~6 מטר. חול רטוב הוא כהה **וקר**, ולכן
-    #     המסכה הזו משמשת גם לצבע וגם ל-Roughness - הברק הוא
-    #     חצי מהסיפור.
-    wet = noise(0.17, 4.0, -420, rough=0.40)
-    wet_r = ramp(wet.outputs["Fac"], -420, 0.40, (0, 0, 0), 0.70, (1, 1, 1))
-    w_mix = mix(-360, wet_r.outputs["Color"], g_mix.outputs["Color"],
+    # --- 4. לחות - **לפי המרחק מקו המים, לא לפי רעש**.
+    #
+    #     רעש אקראי פיזר כתמים רטובים על כל החוף, כולל במקומות
+    #     שהים מעולם לא הגיע אליהם. חול רטוב אינו תופעה אקראית:
+    #     הוא רצועה שצמודה לקו המים, ועומקה הוא עד לאן שהגל
+    #     האחרון הגיע. ``Object`` ב-Y הוא המרחק מהמים במטרים
+    #     (המישור הוא ±60 סביב מרכזו, והקצה הקדמי פונה לים),
+    #     ולכן ``MapRange`` עליו נותן בדיוק רצועה.
+    #
+    #     הרעש לא נזרק - הוא **מופרע** לגבול, ברוחב של כמטר,
+    #     כדי שהרצועה לא תהיה קו ישר. זה ההבדל בין קו מים
+    #     לקו שרטוט.
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    sep.location = (-1250, -420)
+    nt.links.new(src, sep.inputs["Vector"])
+    wn = noise(0.42, 4.0, -560, rough=0.50)
+    jit = nt.nodes.new("ShaderNodeMath")
+    jit.location = (-1000, -560)
+    jit.operation = "MULTIPLY_ADD"
+    jit.inputs[1].default_value = 5.5          # עומק ההפרעה במטרים
+    jit.inputs[2].default_value = -2.75
+    nt.links.new(wn.outputs["Fac"], jit.inputs[0])
+    add = nt.nodes.new("ShaderNodeMath")
+    add.location = (-830, -480)
+    add.operation = "ADD"
+    nt.links.new(sep.outputs["Y"], add.inputs[0])
+    nt.links.new(jit.outputs["Value"], add.inputs[1])
+    wet_r = nt.nodes.new("ShaderNodeMapRange")
+    wet_r.location = (-620, -480)
+    wet_r.inputs["From Min"].default_value = 44.0   # יבש מכאן ואחורה
+    wet_r.inputs["From Max"].default_value = 57.0   # רטוב בקצה
+    wet_r.inputs["To Min"].default_value = 0.0
+    wet_r.inputs["To Max"].default_value = 1.0
+    wet_r.clamp = True
+    nt.links.new(add.outputs["Value"], wet_r.inputs["Value"])
+    # ``MapRange`` מחזיר ``Result`` (ולא ``Color`` כמו ColorRamp).
+    # ``bpy_prop_collection`` אינו ניתן להשמה, ולכן אין "לכנות"
+    # אותו מחדש - פשוט משתמשים בשם הנכון.
+    wet_m = wet_r.outputs["Result"]
+    w_mix = mix(-360, wet_m, g_mix.outputs["Color"],
                 (0.118, 0.086, 0.060))
 
     # --- 5. הזרקת רוויה, נגד AgX.
@@ -1275,7 +1322,7 @@ def sand_material():
     rr.location = (-380, -420)
     rr.inputs["To Min"].default_value = 0.94
     rr.inputs["To Max"].default_value = 0.21
-    nt.links.new(wet_r.outputs["Color"], rr.inputs["Value"])
+    nt.links.new(wet_m, rr.inputs["Value"])
     nt.links.new(rr.outputs["Result"], b.inputs["Roughness"])
     # חול רטוב מחזיר השתקפות רחבה. ``Specular`` מוריד אותה ביבש.
     for k in ("Specular IOR Level", "Specular"):
@@ -1284,7 +1331,7 @@ def sand_material():
             sp.location = (-380, -560)
             sp.inputs["To Min"].default_value = 0.22
             sp.inputs["To Max"].default_value = 0.62
-            nt.links.new(wet_r.outputs["Color"], sp.inputs["Value"])
+            nt.links.new(wet_m, sp.inputs["Value"])
             nt.links.new(sp.outputs["Result"], b.inputs[k])
             break
 
@@ -1596,7 +1643,7 @@ def build(a):
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
          "tone": (0.932, 0.782, 0.676), "flush": (0.80, 0.37, 0.33),
-         "hair": (0.760, 0.545, 0.242), "hair_len": 0.082,
+         "hair": (0.760, 0.545, 0.242), "hair_len": 0.056,
          "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000,
          "swim": {"top_z": 0.737, "top_w": 0.049, "top_wave": 0.017,
                   "hip_z": 0.548, "leg_z": 0.452, "hip_wave": 0.020}},
@@ -1609,7 +1656,7 @@ def build(a):
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
          "turn": math.radians(8.0), "garment": "swim",
          "tone": (0.902, 0.748, 0.652), "flush": (0.74, 0.32, 0.30),
-         "hair": (0.845, 0.700, 0.418), "hair_len": 0.104,
+         "hair": (0.845, 0.700, 0.418), "hair_len": 0.071,
          "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962,
          "swim": {"top_z": 0.744, "top_w": 0.055, "top_wave": 0.013,
                   "hip_z": 0.561, "leg_z": 0.466, "hip_wave": 0.026}},
