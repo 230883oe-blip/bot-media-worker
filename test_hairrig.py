@@ -84,6 +84,14 @@ def main() -> int:
     if not curves:
         print("נכשל: לא נוצר שיער")
         return 2
+    for nm in ("haircurves_", "hairsurf_"):
+        o = None
+        for ob in bpy.data.objects:
+            if ob.name.startswith(nm):
+                o = ob
+                o.parent = arm
+                o.matrix_parent_inverse = arm.matrix_world.inverted()
+        print("הורות: %s -> %s" % (nm, bool(o)))
     curves.parent = arm
     curves.matrix_parent_inverse = arm.matrix_world.inverted()
     if a.bare:
