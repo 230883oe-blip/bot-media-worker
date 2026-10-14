@@ -153,26 +153,51 @@ jobs:
             2>&1 | grep -E "זיכרון|Finished|Error" | tail -12 \
             | tee artifacts/mem_nomaps.txt
           free -m | tee -a artifacts/mem_nomaps.txt
-      - name: שני פריימים קטנים
+      # **מדידת חיבור השיער לשלד, לפני כל פיקסל.** שיער
+      # עקומות אינו נענה ל-``ARMATURE``; הוא נענה ל-``Deform
+      # Curves on Surface``, והנוד הזה אינו נופל כשהוא לא
+      # עובד - הוא פשוט לא מזיז דבר. כלומר הכשל היחיד שלו
+      # הוא שיער קפוא בווידאו המוגמר, שזה הדבר הכי יקר
+      # לגלות. 90 שניות כאן חוסכות שעת רנדר.
+      - name: מבחן חיבור השיער לשלד
         run: |
-          # פריים 1 ופריים 62. פריים 1 לבדו הראה "תקין" בעבר
-          # בעוד שהבימוי היה שבור לאורך כל השוט.
-          for F in 1 62; do
+          mkdir -p artifacts
+          ./${BLDIR}/blender -b --factory-startup -P test_hairrig.py -- \
+            --bundle hbm/human_base_meshes_bundle.blend \
+            --json artifacts/hairrig.json 2>&1 | tee artifacts/hairrig.log
+          grep -q "HAIRRIG: עבר" artifacts/hairrig.log
+      - name: שלושה פריימים קטנים
+        run: |
+          # 1, 62 ו-120. פריים 1 לבדו הראה "תקין" בעבר בעוד
+          # שהבימוי היה שבור לאורך כל השוט, ושני פריימים אינם
+          # מספיקים לבדיקת היציבות - חציון של שניים הוא ממוצע.
+          for F in 1 62 120; do
             ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
               --bundle hbm/human_base_meshes_bundle.blend \
               --hdri hdri/beach.hdr --out artifacts/smoke \
               --skin skin --subdiv ${SUBDIV} --skin-tile ${TILE} \
+              --sep-top 1 --hair-asset 1 --final-light 1 \
               --start $F --end $F --total ${TOTAL} \
               --samples ${{ inputs.samples }} \
-              --width ${{ inputs.width }} --height ${{ inputs.height }}
+              --width ${{ inputs.width }} --height ${{ inputs.height }} \
+              2>&1 | tee -a artifacts/render.log
           done
           ls -l artifacts/smoke
           test -s artifacts/smoke/f0001.png
           test -s artifacts/smoke/f0062.png
+          test -s artifacts/smoke/f0120.png
           # זיכרון פנוי אחרי הרינדור. הריצה 38464421809 נהרגה
           # ב-exit 137 (OOM) אחרי שכל הסצנה נבנתה בהצלחה, וללא
           # המספר הזה זה נראה כמו תקלת רינדור ולא כמו מחנק.
           free -m | tee -a artifacts/mem.txt
+      # **השער חוסם, ולא מדווח.** ``render`` תלוי ב-``smoke``,
+      # ולכן צעד שנכשל כאן מונע את 20 המקטעים ואת שעת המעבד
+      # שלהם. זו כל הסיבה שהוא יושב כאן ולא אחרי הקידוד.
+      - name: שער איכות מחמיר - ארבעה תנאי סף
+        run: |
+          python qa_gate.py --frames artifacts/smoke \
+            --log artifacts/render.log \
+            --json artifacts/qa_gate.json 2>&1 | tee artifacts/qa_gate.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -244,6 +269,7 @@ jobs:
             --bundle hbm/human_base_meshes_bundle.blend \
             --hdri hdri/beach.hdr --out artifacts/frames \
             --skin skin --subdiv ${SUBDIV} --skin-tile ${TILE} \
+            --sep-top 1 --hair-asset 1 --final-light 1 \
             --start $S --end $E --total ${TOTAL} \
             --samples ${{ inputs.samples }} \
             --width ${{ inputs.width }} --height ${{ inputs.height }}
