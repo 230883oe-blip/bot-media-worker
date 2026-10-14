@@ -1270,6 +1270,69 @@ def load_hair_nodes(want) -> dict:
     return have
 
 
+def _hair_surface(body, groups):
+    """עותק קרקפת בלבד שישמש משטח ההיצמדות של השיער.
+
+    למה לא הגוף עצמו: ראה ``hair_curves_asset``. בקצרה - משטח
+    שנושא ``rest_position`` משלם אותו מחיר בכל שלב בשרשרת
+    שלו, והשרשרת של הגוף כוללת חלוקה עם ``use_limit_surface``.
+    כאן הרשת היא אלפי קודקודים בלי שום מודיפייר מלבד השלד.
+
+    הקודקודים נשמרים **במקומם המקורי** (``bmesh`` מוחק פאות
+    ולא מזיז), ולכן ה-UV וה-``surface_uv_coordinate`` שחושב
+    מול הגוף תקפים בלי שום תרגום.
+    """
+    keep = groups.get("scalp") if isinstance(groups, dict) else None
+    if not keep:
+        return None
+    try:
+        import bmesh
+        me = body.data.copy()
+        me.name = "hairsurf_" + body.name
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bm.faces.ensure_lookup_table()
+        kill = [f for f in bm.faces
+                if not all(v.index in keep for v in f.verts)]
+        bmesh.ops.delete(bm, geom=kill, context="FACES")
+        bm.to_mesh(me)
+        bm.free()
+        if not me.polygons:
+            bpy.data.meshes.remove(me)
+            return None
+        ob = bpy.data.objects.new("hairsurf_" + body.name, me)
+        bpy.context.scene.collection.objects.link(ob)
+        # **לא ``hide_render``.** אובייקט שמוסתר מהרנדר אינו
+        # מוערך בכלל ב-depsgraph של הרנדר, ואז ``Deform Curves
+        # on Surface`` היה קורא משטח שלא זז - כלומר בדיוק
+        # הכשל שהוא בא למנוע, רק שקט יותר. כאן האובייקט מוערך
+        # במלואו ורק **נראותו** ב-Cycles מכובה בכל הערוצים.
+        for flag in ("visible_camera", "visible_diffuse", "visible_glossy",
+                     "visible_transmission", "visible_volume_scatter",
+                     "visible_shadow"):
+            if hasattr(ob, flag):
+                setattr(ob, flag, False)
+        # **שמות קבוצות המשקל יושבים על האובייקט ולא על המש.**
+        # ``me.copy()`` מביא את המשקולות ומשאיר את השמות מאחור,
+        # ואז ה-``ARMATURE`` לא מוצא אף עצם ומשאיר את המשטח
+        # קפוא. הסדר חייב להיות זהה - האינדקס בשכבת הדפורמציה
+        # מצביע על מיקום ברשימה.
+        for g in body.vertex_groups:
+            ob.vertex_groups.new(name=g.name)
+        arm_src = next((m.object for m in body.modifiers
+                        if m.type == "ARMATURE" and m.object), None)
+        if arm_src:
+            am = ob.modifiers.new("arm", "ARMATURE")
+            am.object = arm_src
+        log("  משטח שיער ייעודי: %d קודקודים, %d פאות (הגוף: %d)"
+            % (len(me.vertices), len(me.polygons),
+               len(body.data.vertices)))
+        return ob
+    except Exception as e:                                   # noqa: BLE001
+        log("  משטח שיער ייעודי נכשל (%s) - נופלים לגוף" % e)
+        return None
+
+
 def deform_curves_group():
     """קבוצת נודים זעירה סביב ``Deform Curves on Surface`` המובנה.
 
@@ -1622,6 +1685,28 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
                 fuvs.extend((uu, vv))
             at.data.foreach_set("vector", fuvs)
             cu.update_tag()
+            # **המשטח של השיער אינו הגוף המרונדר, וזו החלטת
+            # זיכרון שנמדדה בענן.** ``add_rest_position_attribute``
+            # מכריח את ה-depsgraph להעביר שכבת מיקומים נוספת
+            # דרך **כל** שרשרת המודיפיירים של הגוף - כולל
+            # ``SUBSURF`` עם ``use_limit_surface``, שעליו כבר
+            # תועד כאן שהוא מעריך את משטח הגבול בנפרד לכל תפר
+            # UV. בריצה 38573230459 זה הרג את הרנר (exit 143)
+            # אחרי 363 שניות על פריים של 320×180.
+            #
+            # הפתרון: משטח ייעודי - עותק של **הקרקפת בלבד**,
+            # עם אותו UV ואותן קבוצות משקל, ``ARMATURE`` בלבד
+            # ובלי שום חלוקה, ומוסתר מהרנדר. הוא מעוות בדיוק
+            # כמו הראש, הוא מה שה-Deform קורא, והגוף המרונדר
+            # אינו נושא ``rest_position`` כלל.
+            surf = _hair_surface(body, groups)
+            if surf is not None:
+                cu.surface = surf
+                if surf.data.uv_layers:
+                    cu.surface_uv_map = surf.data.uv_layers[0].name
+                surf.add_rest_position_attribute = True
+            else:
+                body.add_rest_position_attribute = True
             # **והדגל הזה הוא כל ההבדל בין "המודיפייר קיים"
             # לבין "השיער זז".** ``Deform Curves on Surface``
             # משווה את המשטח ב-rest למשטח המעוות, והוא קורא
@@ -3731,7 +3816,15 @@ def build(a):
         # טקסטורה - הוא גם מה שמקשר כל שורש שיער למשטח
         # (``surface_uv_coordinate``). בלעדיו ``Deform Curves on
         # Surface`` אינו עושה כלום, והשיער נשאר קפוא כשהראש זז.
-        uvname = ensure_uv(body)
+        # **UV גם בלי מפות עור - אבל רק כששיער העקומות דלוק.**
+        # ה-UV אינו רק נשא של טקסטורה; הוא מה שמקשר כל שורש
+        # שיער למשטח (``surface_uv_coordinate``), ובלעדיו
+        # ``Deform Curves on Surface`` אינו עושה דבר. מצד שני
+        # ``Smart Project`` יוצר תפרים, וכל תפר מייקר את
+        # ה-``SUBSURF`` - ולכן שלב שאינו צריך לא שיער ולא
+        # מפות (מדידת בסיס הזיכרון) אינו משלם על זה כלום.
+        need_uv = bool(skinmaps) or bool(a.hair_asset)
+        uvname = ensure_uv(body) if need_uv else ""
         if not skinmaps:
             uvname = ""
         skin = skin_material("skin_" + s["tag"], s["tone"], s["flush"],
@@ -3848,7 +3941,11 @@ def build(a):
                 g.add(list(range(len(e.data.vertices))), 1.0, "REPLACE")
                 em = e.modifiers.new("arm", "ARMATURE")
                 em.object = arm
-        for extra in (garment, shell, bikini, straps, curves):
+        # משטח השיער הייעודי חייב לרשת את אותה הורות כמו הגוף,
+        # אחרת ``root.location`` מזיז את הדמות ומשאיר אותו -
+        # והשיער עוקב אחרי משטח שנשאר מאחור.
+        hsurf = bpy.data.objects.get("hairsurf_" + body.name)
+        for extra in (garment, shell, bikini, straps, curves, hsurf):
             if not extra:
                 continue
             extra.parent = root
