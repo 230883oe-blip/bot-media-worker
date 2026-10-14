@@ -221,7 +221,21 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
     vs = vlist(body)
     xs = [abs(v.x) for v in vs]
     xmax = max(xs) or 1.0
+    # --- **ציר הראש נמדד, לא מונח.** ``front`` חושב עד כה כ-
+    #     ``v.y*fdir / 0.075`` ביחס למרכז ה-**גוף**. אבל מרכז
+    #     הגוף אינו מרכז הראש: בנכס הזה הראש יושב מעט אחורה,
+    #     ולכן המצח החזיתי קיבל ``front`` של כ-0.5 במקום 1,
+    #     קו השיער ירד ב-3 ס"מ, והשיער גדל על המצח עד הגבות.
+    #     זה בדיוק מה שנראה בפריים s1014-131xxx. המדידה היא
+    #     על קודקודי הראש עצמם.
+    hy = [v.y * fdir for v in vs if v.z / h > 0.900]
+    if hy:
+        y_mid = 0.5 * (min(hy) + max(hy))
+        y_half = max(0.012, 0.5 * (max(hy) - min(hy)))
+    else:
+        y_mid, y_half = 0.0, 0.075
     scalp, chest, swim, crop, hairlen = {}, {}, {}, {}, {}
+    hits = {"cup": 0, "band": 0, "strap": 0, "low": 0}
     sw = swimcut or {}
     cut_tz = float(sw.get("top_z", 0.737))     # מרכז העליון (יחס גובה)
     cut_tw = float(sw.get("top_w", 0.049))     # חצי-רוחב העליון
@@ -253,8 +267,8 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         #     ובאורך 9-11 ס"מ המעטפת סגרה על הפנים לגמרי.
         #     0.908 הוא הפשרה שנמדדה: מעט יותר שיער בעורף
         #     מהמקור (0.915) בלי להגיע לקו הגבות.
-        front = max(0.0, min(1.0, (v.y * fdir) / 0.075))
-        lo = 0.908 + 0.068 * front
+        front = max(0.0, min(1.0, (v.y * fdir - y_mid) / (0.62 * y_half)))
+        lo = 0.908 + 0.072 * front
         if zr > lo:
             scalp[i] = smoothstep(lo, lo + 0.030, zr)
             #     **אורך משתנה לכל גדיל** דרך ``vertex_group_length``.
@@ -276,7 +290,7 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
             # **יורד** ובונה תסרוקת במקום להתנפח. הכתר, החזית
             # והצדדים מקבלים 16% מהאורך, שזה קרוב לצמוד.
             backness = max(0.0, min(1.0,
-                                    (-(v.y * fdir) + 0.028) / 0.088))
+                                    (y_mid - v.y * fdir) / (0.75 * y_half)))
             hl = (0.16 + 0.84 * backness) * (1.0 - 0.58 * tt)
             hairlen[i] = max(0.10, min(1.0, hl))
         # --- חזה: טבעת סביב 0.73h בחצי הקדמי. משקל גאוסיאני
@@ -385,11 +399,13 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
             z_dn = cut_tz - 0.058 * (t_cup ** 1.35)
             if z_dn < zj < z_up:
                 swim[i] = 1.0
+                hits["cup"] += 1
         # רצועת הגב/צד: דקה, **ורק מאחור ובצדדים**. ``fwd<0.34``
         # הוא כ-70° מהחזית והלאה, כלומר היא מתחילה מעבר לקצה
         # החיצוני של הגביע ולכן אינה חוצה את החזה.
         if torso and fwd < 0.34 and abs(zj - cut_tz) < 0.0130:
             swim[i] = 1.0
+            hits["band"] += 1
         # רצועות צוואר: מקצה הגביע כלפי מעלה ופנימה. בלעדיהן
         # שני המשולשים נראים מודבקים על הגוף בלי מה שמחזיק
         # אותם. חצי-רוחב 1.5 ס"מ ולא פחות: ``make_garment``
@@ -403,6 +419,7 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
             # מה שהפך את הצורה למלבן.
             if abs(bx - cxx * (1.0 - 0.58 * tt_s)) < 0.013:
                 swim[i] = 1.0
+                hits["strap"] += 1
         # --- תחתון: **גזרת רגל גבוהה, לא מכנסון.** קודם
         #     ``z_lo`` היה קבוע כמעט (0.452 ± 1 ס"מ), כלומר
         #     קצה תחתון אופקי שחוצה את הירך - מכנסון, וכך זה
@@ -418,10 +435,16 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         z_hi = cut_hz - 0.024 * fr
         if torso and z_lo < zj < z_hi:
             swim[i] = 1.0
+            hits["low"] += 1
         # רצועת מותן דקה: מה שמחזיק את התחתון כשהבד נעלם
         # בצדדים. בלעדיה הייתי מקבל שני משולשים לא מחוברים.
         if torso and abs(zj - cut_hz) < 0.0125:
             swim[i] = 1.0
+            hits["low"] += 1
+    log("  גזרה: גביעים=%d רצועת-גב=%d רצועות-צוואר=%d תחתון=%d · "
+        "ציר ראש y=%.3f±%.3f · xmax=%.3f"
+        % (hits["cup"], hits["band"], hits["strap"], hits["low"],
+           y_mid, y_half, xmax))
     vgroup(body, "scalp", scalp)
     vgroup(body, "chest", chest)
     vgroup(body, "hairlen", hairlen)
@@ -2532,7 +2555,7 @@ def main() -> int:
     ap.add_argument("--skin-tile", type=float, default=18.0,
                     dest="skin_tile",
                     help="כמה פעמים המפה חוזרת על פני ה-UV")
-    ap.add_argument("--skin-detail", type=float, default=0.92,
+    ap.add_argument("--skin-detail", type=float, default=0.62,
                     dest="skin_detail",
                     help="עוצמת שכבת הצילום על הבסיס, 0..1")
     ap.add_argument("--inventory", action="store_true",
