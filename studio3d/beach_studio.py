@@ -1816,8 +1816,32 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
             # הצידה, אבל הפעם על מה שבאמת מרונדר. התקרה היא
             # 2.5 ס"מ **מעל** קו הגבות, כי תיבת הפנים של שער
             # האיכות מתחילה במצח ולא בגבה.
+            # **חסם הכדור, והוא התיקון שהחסר שלו החזיק את
+            # "הפלומה הכדורית" שישה סבבים.** הקטנת עוצמת הרעש
+            # מ-7.5 ל-1.6 ס"מ שינתה את הפריים ב-2.9 רמות אפור
+            # בלבד - כלומר הנפח **אינו** מגיע מהרעש אלא מכך
+            # שהגדילים עצמם יוצאים רדיאלית מהקרקפת ואף שלב
+            # בשרשרת אינו מגביל את המרחק שלהם מהראש. כאן זה
+            # נאכף ישירות: מעל קו הצוואר שום נקודת שיער אינה
+            # רחוקה מהגולגולת ביותר מ-18% מרדיוסה (כ-1.3 ס"מ
+            # של עובי תסרוקת). **מתחת** לקו הצוואר אין חסם -
+            # שם השיער אמור ליפול חופשי על הכתפיים, וזה בדיוק
+            # ההבדל בין תסרוקת לקסדה.
+            clamped = 0
+            qmax = 1.18
             for i in range(baked):
                 x, y, z = flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]
+                if z > neck_z:
+                    qx = (x - hc.x) / hr.x
+                    qy = (y - hc.y) / hr.y
+                    q = math.hypot(qx, qy)
+                    if q > qmax:
+                        k = qmax / q
+                        x = hc.x + qx * k * hr.x
+                        y = hc.y + qy * k * hr.y
+                        flat[3 * i] = x
+                        flat[3 * i + 1] = y
+                        clamped += 1
                 if (z < face_ceiling and (y - cy) * fdir > -FACE_BACK
                         and abs(x - head_x) < FACE_HALF):
                     side = 1.0 if x >= head_x else -1.0
@@ -1832,7 +1856,10 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
                                      flat[3 * i + 2]))
                    for i in range(baked)]
             log("    grooming קובע ב-%d נקודות · %d נקודות פונו "
-                "מתיבת הפנים (תקרה z=%.3f)" % (baked, fixed, face_ceiling))
+                "מתיבת הפנים (תקרה z=%.3f) · %d נקודות הוחזרו "
+                "אל מעטפת הראש (q<=%.2f, רדיוס %.3f/%.3f)"
+                % (baked, fixed, face_ceiling, clamped, qmax,
+                   hr.x, hr.y))
     if "Set Hair Curve Profile" in ng:
         # 0.14 מ"מ ברדיוס. שערה אנושית היא 0.05-0.09 מ"מ ברדיוס,
         # אבל כאן גדיל אחד מייצג כמה שערות (45 אלף גדילים מול
@@ -2376,6 +2403,51 @@ def _clear_of_render_surface(ob, body, margin=0.012):
             "min_before": round(lo_b, 5), "min_after": round(lo_a, 5)}
 
 
+def log_camera_cover(obs, body, cam):
+    """האם המצלמה בכלל רואה את הבגד - שתי שאלות נפרדות.
+
+    שישה סבבים ניסו לתקן את הגביעים לפי הנחה מה מסתיר אותם,
+    ואף אחד לא מדד את זה. כאן שתי המדידות שמפרידות בין שלוש
+    האפשרויות:
+    1. האובייקט בכלל מגיע ל-depsgraph שהרנדרר קורא?
+    2. כמה מהקודקודים שלו מוסתרים על ידי **הגוף** מנקודת
+       המצלמה (קרן מהמצלמה אל הקודקוד מול ה-BVH של הגוף)?
+    אם הוא בדפסגרף ואינו מוסתר - הבעיה אינה גאומטרית בכלל,
+    וכל סבב כוונון נוסף של המיקום הוא בזבוז.
+    """
+    if not obs:
+        return
+    try:
+        tree, _mw, _n = _render_surface_bvh(body)
+    except Exception as e:                                   # noqa: BLE001
+        log("    (כיסוי מצלמה לא נמדד: %s)" % e)
+        return
+    dg = bpy.context.evaluated_depsgraph_get()
+    live = {i.object.name for i in dg.object_instances if i.object}
+    co = cam.matrix_world.translation
+    for ob in obs:
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        mw = ev.matrix_world
+        tot = occ = 0
+        for v in me.vertices:
+            p = mw @ v.co
+            d = p - co
+            L = d.length
+            if L < 1e-5:
+                continue
+            tot += 1
+            hit = tree.ray_cast(co, d / L, L)
+            if hit and hit[0] is not None and hit[3] is not None \
+                    and hit[3] < L - 0.002:
+                occ += 1
+        ev.to_mesh_clear()
+        log("    כיסוי מצלמה %s: בדפסגרף=%s · %d/%d קודקודים "
+            "מוסתרים על ידי הגוף (%.0f%%)"
+            % (ob.name, ob.name in live, occ, tot,
+               100.0 * occ / max(1, tot)))
+
+
 def _stick_to_body(co, body, offset):
     """מצמיד נקודה למשטח הגוף + הזזה לאורך הנורמל (Shrinkwrap אפוי).
 
@@ -2567,7 +2639,6 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     # אחד בלבד: הוא **נפח סגור**, ולא יריעה פתוחה.
     # כשהסיבה אינה ידועה, הצעד הנכון הוא ליישר קו עם הבנייה
     # שהוכחה כעובדת - לא להמשיך לכוון את זו שלא.
-    bmesh.ops.solidify(bm, geom=bm.faces[:], thickness=-0.0045)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     bm.normal_update()
     # **כיוון הפאות, והוא זה שהבליע את הגביעים בסבב הקודם.**
@@ -2586,7 +2657,37 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     bm.to_mesh(ob.data)
     bm.free()
     _bind_like_body(ob, body, kd, per)
-    # **בלי SOLIDIFY ובלי SUBSURF, וזה לא ויתור אלא ממצא.**
+    # **יישור קו עם מה שכן מרונדר, ולא עוד כוונון של מה שלא.**
+    #
+    # אחרי שבעה סבבים זה המצב: הגביעים נמדדו 12-22 מ"מ מחוץ
+    # למשטח ה**מרונדר** (לא הבסיסי - ראה ``_render_surface_bvh``),
+    # עם 2112 פאות, חומר תקין ותיבת עולם על החזה - ובפריים
+    # נראה רק קו הקצה העליון. באותה סצנה בדיוק, הרצועות
+    # (``make_top_straps``) מרונדרות במלואן. ההבדל היחיד שנותר
+    # בין השניים הוא ששם יש ``SOLIDIFY`` + ``SUBSURF`` כ**מודיפיירים**
+    # וכאן הייתה קליפה דקה שנוצרה בתוך ה-bmesh.
+    #
+    # ``bmesh.ops.solidify`` עם עובי **שלילי** בונה את הקליפה
+    # פנימה ומשאיר את כיוון הפאות תלוי בסדר הקודקודים; אחריו
+    # הקוד בדק "האם ממוצע הנורמלים מצביע קדימה" - מבחן שאין לו
+    # שום משמעות על קליפה **סגורה**, שם הממוצע הוא אפס ברעש.
+    # היומן אכן דיווח בכל ריצה "(הגביעים הופכו)", כלומר כל
+    # הפאות התהפכו לפי הטלת מטבע.
+    #
+    # כאן העובי חוזר להיות מודיפייר רגיל עם ``offset=1`` (כלפי
+    # חוץ בלבד, כך שהבד לעולם לא נכנס אל העור), והכיוון נקבע
+    # על ידי ``recalc_face_normals`` על משטח פתוח - שם הוא
+    # חד-משמעי.
+    sol = ob.modifiers.new("thick", "SOLIDIFY")
+    sol.thickness = 0.0045
+    sol.offset = 1.0
+    sol.use_rim = True
+    sol.use_rim_only = False
+    sub = ob.modifiers.new("sub", "SUBSURF")
+    sub.levels = 0
+    sub.render_levels = 1
+    sub.use_limit_surface = True
+    # **הערה לשמירה.** עד כאן היה כתוב כאן:
     # שלושה סבבים נמדדו בהם 968 פאות, תיבה נכונה בדיוק על השד
     # ומרחק 8.0 מ"מ מהעור - ובפריים לא הופיע דבר. האובייקט
     # היחיד שכן הופיע (הרצועות) נבנה באותה פונקציית חיבור
@@ -4151,6 +4252,8 @@ def build(a):
     cam, dist, ctr = fit_camera([c["body"] for c in cast],
                                 w=a.width, h=a.height)
     cam0 = tuple(cam.location)
+    for c in cast:
+        log_camera_cover(c.get("extras") or [], c["body"], cam)
     WATER_OB[:] = [water]
     return cast, cam, cam0, dist, ctr, waves, foam, meta
 
