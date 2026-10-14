@@ -213,6 +213,28 @@ def check_face_hair(logtext: str, img=None, min_skin=0.28):
             if len(ys) < 10:
                 continue
             top, bot = int(ys.min()), int(ys.max())
+            # **הראש אינו בתוך ``subject_mask``, ולכן התיבה נפלה
+            # על הצוואר - וזה הפך את הבדיקה הזו לחסרת ערך.**
+            #
+            # ``subject_mask`` חוסמת במכוון כל פיקסל מעל 18%
+            # מגובה הקאדר (שם יושבים השמיים), ובקאדר גוף-מלא
+            # **הראש נמצא שם**. נמדד על הפריים: הפסגה שהיא
+            # החזירה היא y=97, כלומר קו הכתפיים, ותיבת "הפנים"
+            # יצאה y=109..143 - על הצוואר ועצמות הבריח. לכן
+            # השער דיווח "0% עור בפנים" על פריים שבו הפנים
+            # גלויות לגמרי. הסף לא השתנה; רק המקום שבו מודדים.
+            #
+            # פסגת הראש נמצאת כאן מלמעלה: השמיים כאן שרופים
+            # (ערך מרבי מעל 0.93 בכל שלושת הערוצים), והשיער
+            # והעור אינם. השורה הראשונה שבה יש מסה של פיקסלים
+            # שאינם שמיים היא קודקוד הראש.
+            band = img[:, x0:x1]
+            notsky = (band.max(axis=2) < 0.93).sum(axis=1)
+            cand = np.nonzero(notsky >= 4)[0]
+            if len(cand):
+                ht = int(cand.min())
+                if ht < top:
+                    top = ht
             span = bot - top
             # אזור הפנים: 3%..11% מגובה הדמות, שליש מרכזי ברוחב.
             fy0, fy1 = top + int(span * 0.03), top + int(span * 0.11)
@@ -221,7 +243,7 @@ def check_face_hair(logtext: str, img=None, min_skin=0.28):
             cw = cx1 - cx0
             fx0 = cx0 + int(cw * 0.30)
             fx1 = cx0 + int(cw * 0.70)
-            box = subject_mask(img[fy0:fy1, x0 + fx0:x0 + fx1])
+            box = subject_mask(img[fy0:fy1, x0 + fx0:x0 + fx1], clip=False)
             fr.append(round(float(box.mean()), 4))
         det["face_skin_fraction"] = fr
         det["min_required"] = min_skin
@@ -273,7 +295,7 @@ def check_sea_sand(img: np.ndarray, horizon=0.42):
 
 # ------------------------------- 4. חדירה / היעלמות תחת תנועת מצלמה
 
-def subject_mask(img: np.ndarray):
+def subject_mask(img: np.ndarray, clip: bool = True):
     """פיקסלים שאינם ים/חול/שמיים: עור, בד ושיער.
 
     הזיהוי הוא לפי **רוויה** ולא לפי גוון: חול וים בפריים הזה
@@ -282,6 +304,13 @@ def subject_mask(img: np.ndarray):
     h, w, _ = img.shape
     box = np.zeros((h, w), bool)
     box[int(h * 0.18):int(h * 0.97), int(w * 0.08):int(w * 0.92)] = True
+    # **החיתוך ב-18% מוציא את הראש, ולכן הוא חייב להיות ניתן
+    # לכיבוי.** הוא נכון למדידת שטח הדמות (שם הוא מרחיק את
+    # השמיים), והוא הרסני למדידת עור **בפנים** - הפנים יושבות
+    # בדיוק באזור שהוא מוחק, ולכן הבדיקה החזירה 0% על פריים
+    # שבו הפנים גלויות לגמרי.
+    if not clip:
+        box[:] = True
     mx = img.max(axis=2)
     mn = img.min(axis=2)
     sat = (mx - mn) / np.maximum(1e-5, mx)
