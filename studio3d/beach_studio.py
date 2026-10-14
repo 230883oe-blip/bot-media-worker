@@ -1698,7 +1698,12 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
             # ולכן הקצה העליון הוא קודקוד אחד והתחתון בסיס רחב -
             # משולש הפוך, שזו גזרת גביע. ``ty**0.72`` נותן צלע
             # קמורה מעט ולא ישרה, וזה ההבדל בין משולש נייר לבד.
-            wmax = max(0.045, 1.0 - ty ** 0.72)
+            # **רצפה 0.16 ולא 0.045.** עם 0.045 כל 23 עמודות
+            # הקצה העליון נדחסות ל-4.6 מ"מ, ואז ``remove_doubles``
+            # מאחד אותן ומוחק איתן את הפאות - מש שמדווח 707
+            # קודקודים ומרנדר כלום. קצה עגול של 1.6 ס"מ הוא גם
+            # נכון יותר לגביע אמיתי.
+            wmax = max(0.160, 1.0 - ty ** 0.72)
             for ix in range(nseg + 1):
                 tx = (ix / float(nseg)) * 2.0 - 1.0
                 x = a.x + tx * cw * wmax
@@ -1721,7 +1726,9 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
         v.co = _stick_to_body(v.co, body, 0.0080)
     bm = bmesh.new()
     bm.from_mesh(ob.data)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0014)
+    # 0.4 מ"מ ולא 1.4: הסף הקודם איחד קודקודים שכנים בתוך הגביע
+    # עצמו (התא שם הוא כ-4 מ"מ אחרי ההצמדה) ומחק את הפאות ביניהם.
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0004)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     bm.normal_update()
     # **כיוון הפאות, והוא זה שהבליע את הגביעים בסבב הקודם.**
@@ -1754,8 +1761,17 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     ob.data.materials.append(mat)
     for p in ob.data.polygons:
         p.use_smooth = True
-    log("  עליון %s: 2 גביעים נפרדים, %d קודקודים, חצי-מרחק %.3f "
-        "רוחב %.3f" % (name, len(ob.data.vertices), half, cw))
+    # **מדידה ביומן, לא הצהרה.** שני סבבים דיווחו "2 גביעים
+    # נפרדים, 751 קודקודים" בזמן שבפריים לא הופיע דבר - כי
+    # קודקודים אינם פאות, ומש בלי פאות אינו מרונדר. מכאן ואילך
+    # היומן אומר גם כמה פאות שרדו ואיפה הגביע יושב בפועל.
+    lo, hi = bbox_of(ob)
+    log("  עליון %s: 2 גביעים, %d קודקודים / %d פאות · חצי-מרחק %.3f "
+        "רוחב %.3f · תיבה x %.3f..%.3f z %.3f..%.3f (zr %.3f..%.3f)"
+        % (name, len(ob.data.vertices), len(ob.data.polygons), half, cw,
+           lo.x, hi.x, lo.z, hi.z, lo.z / h, hi.z / h))
+    if not len(ob.data.polygons):
+        log("    אזהרה: אין פאות - הגביע לא יופיע בפריים")
     return ob
 
 
