@@ -233,8 +233,19 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         zr = v.z / h
         # --- קרקפת: הכובע העליון של הראש, דועך כלפי מטה כדי
         #     שקו השיער לא ייחתך בסכין.
-        if zr > 0.915:
-            scalp[i] = smoothstep(0.915, 0.952, zr)
+        #
+        #     **הגבול אינו סימטרי קדימה-אחורה, ובכוונה.** עד כאן
+        #     ``zr > 0.915`` גידל שיער גם על המצח הקדמי, ושם
+        #     הגדיל צומח לפי הנורמל - כלומר **קדימה אל תוך
+        #     הפנים**. בפריים המבחן זה נקרא כהילה שמשתפלת על
+        #     המצח ומצלה על ארובות העיניים. קו שיער אנושי נסוג
+        #     בחזית: הוא מתחיל גבוה יותר מעל הגבות מאשר בעורף.
+        #     ``front`` הוא 1 בחזית המלאה ו-0 בעורף, והוא מרים
+        #     את הסף ב-3.4% מגובה הגוף - כ-6 ס"מ של מצח פנוי.
+        front = max(0.0, min(1.0, (v.y * fdir) / 0.075))
+        lo = 0.915 + 0.034 * front
+        if zr > lo:
+            scalp[i] = smoothstep(lo, lo + 0.037, zr)
         # --- חזה: טבעת סביב 0.73h בחצי הקדמי. משקל גאוסיאני
         #     בשני צירים, כך שההגדלה חלקה ואינה יוצרת תפר.
         if 0.665 < zr < 0.805 and v.y * fdir > -0.02:
@@ -937,9 +948,15 @@ def add_hair(body, length: float, col, count=4200, children=16):
          roughness_1=0.006, roughness_1_size=0.04,
          roughness_2=0.010, roughness_2_size=0.14,
          roughness_endpoint=0.004,
-         kink="CURL", kink_amplitude=0.006, kink_frequency=3.0,
-         kink_shape=0.15,
-         root_radius=0.010, tip_radius=0.0015, radius_scale=0.030,
+         # **``CURL`` נתן נפח כדורי.** תלתל סביב ציר הגדיל, על
+         # גדילים שכולם צומחים רדיאלית מהקרקפת, מצטבר לכדור -
+         # וזה מה שנמדד בפריים: "אפרו" ולא תספורת, שמשתפל על
+         # המצח. ``WAVE`` מכופף את הגדיל במישור אחד, כלומר גל
+         # רך שיורד במקום סליל שמתנפח. התדר הנמוך (1.7 מול 3.0)
+         # הוא ההבדל בין גל לקפיץ.
+         kink="WAVE", kink_amplitude=0.011, kink_frequency=1.7,
+         kink_shape=-0.22,
+         root_radius=0.010, tip_radius=0.0015, radius_scale=0.026,
          use_close_tip=True)
     # חומר השיער הוא הסלוט השני של הגוף.
     mi = len(body.data.materials)
@@ -1066,93 +1083,230 @@ def plane(name, size, loc, rot=(0, 0, 0)):
     return ob
 
 
+def sand_plane(name="sand", size=120.0, loc=(0.0, -55.0, 0.0), cuts=150):
+    """מישור החול, **עם גאומטריה ולא רק עם שיידר**.
+
+    עד כאן החול היה ``primitive_plane_add`` - ארבעה קודקודים.
+    מישור בארבעה קודקודים אינו מטיל צל על עצמו ואין לו קו אופק
+    משתנה, ולכן הוא נקרא כרצפה יצוקה גם כשהשיידר שעליו מושלם.
+    זו הייתה הטעות ששרדה שלושה סבבים: כל התיקונים נעשו בצבע,
+    והבעיה הייתה בצורה.
+
+    ``grid`` של 150×150 על 120 מטר הוא תא של 80 ס"מ, ו-``Displace``
+    עם ענן בקנה מידה גדול מרים ממנו דיונות רכות של 4-12 ס"מ.
+    22,500 פאות הן כאחוז אחד מתקציב הסצנה (הדמויות לבדן הן 21
+    אלף קודקודים לפני החלוקה), ולכן זה זול בזיכרון - והוא
+    הדבר היחיד שנותן **צל אמיתי** על החול, מה ש-Bump לעולם
+    לא ייתן כי הוא מטה נורמל ואינו מזיז משטח.
+    """
+    bpy.ops.mesh.primitive_grid_add(size=size, x_subdivisions=cuts,
+                                    y_subdivisions=cuts, location=loc)
+    ob = bpy.context.active_object
+    ob.name = name
+    tex = bpy.data.textures.new("sand_dunes", type="CLOUDS")
+    # 6.5 מטר: סדר הגודל של שקע/תלולית בחוף דרוך. קטן מזה
+    # נבלע בתא הגריד, גדול מזה נראה כגבעה ולא כחול.
+    tex.noise_scale = 6.5
+    tex.noise_depth = 4
+    d = ob.modifiers.new("dunes", "DISPLACE")
+    d.texture = tex
+    d.texture_coords = "GLOBAL"
+    d.strength = 0.115
+    d.mid_level = 0.5
+    # שכבה שנייה, דקה וצפופה: אדוות הרוח. הן מה שהעין קוראת
+    # כ"חול" ולא כ"אדמה", והן חייבות להיות בגאומטריה כי הכיווניות
+    # שלהן יוצרת פס צל וpס אור לסירוגין מול שמש נמוכה.
+    tex2 = bpy.data.textures.new("sand_ripples", type="WOOD")
+    tex2.noise_basis_2 = "SIN"
+    tex2.wood_type = "BANDNOISE"
+    tex2.noise_scale = 0.60
+    tex2.turbulence = 2.4
+    d2 = ob.modifiers.new("ripples", "DISPLACE")
+    d2.texture = tex2
+    d2.texture_coords = "GLOBAL"
+    d2.strength = 0.022
+    d2.mid_level = 0.5
+    for p in ob.data.polygons:
+        p.use_smooth = True
+    log("  חול: גריד %d×%d, %d פאות, דיונות+אדוות בגאומטריה"
+        % (cuts, cuts, len(ob.data.polygons)))
+    return ob
+
+
 def sand_material():
-    """חול עם מרקם **במטרים**, לא בקואורדינטות מנורמלות.
+    """חול ים מוזהב - **בסקאלות שהמצלמה רואה**.
 
-    זו הייתה התקלה השקטה בפריים המבחן: ``Generated`` נותן 0..1
-    על פני המישור כולו, ועל מישור של 120 מטר ``Scale=85`` הוא
-    תקופה של 1.4 מטר - כלומר כתם אחד לכל הקאדר. התוצאה נמדדה
-    כמשטח אחיד בלי מרקם, ובדיוק זה מה שהשער פוסל כ-``flat_ratio``
-    ו-``chroma_std``. ``Object`` נותן מטרים, ולכן ``Scale=14``
-    הוא תקופה של 7 ס"מ - ריאליסטי, ונשאר נכון גם אם גודל
-    המישור ישתנה.
+    ארבעה סבבים ניסו לתקן את "המשטח האפור השטוח" בצבע, וכולם
+    נכשלו מאותה סיבה: ``Noise Scale=14`` בקואורדינטות מטר הוא
+    תקופה של **7 ס"מ**. במצלמת 85mm על 960×540, פיקסל אחד על
+    החול שבעשרה מטר מכסה כ-12 ס"מ. כלומר כל תקופה שלמה של
+    המרקם נופלת בתוך פיקסל אחד, Cycles ממצע אותה, והתוצאה היא
+    בדיוק הממוצע של ה-ColorRamp - צבע אחד, בכל הפריים. מרקם
+    שאינו נראה אינו קיים, וזה אינו באג בשיידר אלא בתדר.
 
-    שלוש שכבות: גרגר דק, כתמי לחות כהים ליד קו המים, וצדפים
-    בהירים. שלושתן מפרידות גוון ולא רק בהירות - ולכן הן נמדדות.
+    לכן כאן ההיררכיה הפוכה ומפורשת, מהגס לדק:
+
+    ===============  ============  =========================
+    שכבה             תקופה          מה היא נותנת
+    ===============  ============  =========================
+    אזורי לחות        ~6 מטר        חול רטוב כהה ליד המים
+    דיונות/שקעים      ~1.4 מטר      שבירת טון רחבה
+    אדוות רוח         ~35 ס"מ       **הפירוט שהעין רואה**
+    גרגר              ~4 ס"מ        מיקרו, עובד רק בחזית
+    ===============  ============  =========================
+
+    השכבה שמכריעה היא האדוות: 35 ס"מ הם כשלושה פיקסלים במרחק
+    בינוני, כלומר מעל סף הפתרון, ולכן הן שורדות את הממוצע.
+
+    הדבר השני: **AgX מוחק רוויה.** ``view_transform=AgX`` עם
+    ``exposure=-0.62`` מגלגל גוונים חמים אל הניטרלי - זו המטרה
+    שלו, והיא נכונה לעור. חול בז' "נכון" פיזיקלית יוצא ממנו
+    אפור. התיקון אינו לשנות את החשיפה הגלובלית (היא מכוילת
+    לעור) אלא להזריק רוויה **לחומר הזה בלבד**, דרך
+    ``HueSaturation`` לפני ה-BSDF.
+
+    והשלישי: ``Roughness`` קבוע 0.90 הוא חול יבש בכל מקום. חול
+    רטוב הוא ``Roughness`` 0.2 - הוא מחזיר את השמיים ומבריק,
+    וזה הסימן החזותי מספר אחת שמפריד חוף מרצפה.
     """
     mat = bpy.data.materials.new("sand")
     nt, out = _nodes(mat)
     b = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    b.location = (520, 0)
+    b.location = (900, 0)
     tc = nt.nodes.new("ShaderNodeTexCoord")
-    tc.location = (-1150, 0)
+    tc.location = (-1500, 0)
+    # ``Object`` ולא ``Generated``: Object הוא מטרים ונשאר נכון
+    # גם אם המישור יגדל. Generated הוא 0..1 על ה-bbox, ולכן כל
+    # שינוי בגודל המישור היה משנה את כל התדרים בבת אחת.
+    src = tc.outputs["Object"]
 
-    n = nt.nodes.new("ShaderNodeTexNoise")
-    n.location = (-900, 140)
-    n.inputs["Scale"].default_value = 14.0
-    n.inputs["Detail"].default_value = 12.0
-    n.inputs["Roughness"].default_value = 0.62
-    nt.links.new(tc.outputs["Object"], n.inputs["Vector"])
-    r = nt.nodes.new("ShaderNodeValToRGB")
-    r.location = (-660, 140)
-    r.color_ramp.elements[0].position = 0.30
-    r.color_ramp.elements[0].color = (0.355, 0.268, 0.178, 1)
-    r.color_ramp.elements[1].position = 0.72
-    r.color_ramp.elements[1].color = (0.735, 0.645, 0.492, 1)
-    nt.links.new(n.outputs["Fac"], r.inputs["Fac"])
+    def noise(scale, detail, y, rough=0.55, dim="3D"):
+        n = nt.nodes.new("ShaderNodeTexNoise")
+        n.location = (-1250, y)
+        n.noise_dimensions = dim
+        n.inputs["Scale"].default_value = scale
+        n.inputs["Detail"].default_value = detail
+        if "Roughness" in n.inputs:
+            n.inputs["Roughness"].default_value = rough
+        nt.links.new(src, n.inputs["Vector"])
+        return n
 
-    # כתמי לחות: תדר נמוך, גוון קר וכהה. חול רטוב הוא ההבדל
-    # הגדול ביותר בין "מישור בז'" לחוף.
-    w = nt.nodes.new("ShaderNodeTexNoise")
-    w.location = (-900, -140)
-    w.inputs["Scale"].default_value = 1.6
-    w.inputs["Detail"].default_value = 6.0
-    nt.links.new(tc.outputs["Object"], w.inputs["Vector"])
-    wr = nt.nodes.new("ShaderNodeValToRGB")
-    wr.location = (-660, -140)
-    wr.color_ramp.elements[0].position = 0.42
-    wr.color_ramp.elements[0].color = (0, 0, 0, 1)
-    wr.color_ramp.elements[1].position = 0.66
-    wr.color_ramp.elements[1].color = (1, 1, 1, 1)
-    nt.links.new(w.outputs["Fac"], wr.inputs["Fac"])
-    mixw = nt.nodes.new("ShaderNodeMixRGB")
-    mixw.location = (-380, 60)
-    mixw.blend_type = "MIX"
-    mixw.inputs["Color2"].default_value = (0.212, 0.176, 0.145, 1)
-    nt.links.new(wr.outputs["Color"], mixw.inputs["Fac"])
-    nt.links.new(r.outputs["Color"], mixw.inputs["Color1"])
+    def ramp(src_out, y, p0, c0, p1, c1):
+        r = nt.nodes.new("ShaderNodeValToRGB")
+        r.location = (-1000, y)
+        r.color_ramp.elements[0].position = p0
+        r.color_ramp.elements[0].color = (*c0, 1.0)
+        r.color_ramp.elements[1].position = p1
+        r.color_ramp.elements[1].color = (*c1, 1.0)
+        nt.links.new(src_out, r.inputs["Fac"])
+        return r
 
-    # צדפים/גרגרי קוורץ בהירים: Voronoi דליל, תדר גבוה.
-    v = nt.nodes.new("ShaderNodeTexVoronoi")
-    v.location = (-900, -420)
-    v.inputs["Scale"].default_value = 90.0
-    nt.links.new(tc.outputs["Object"], v.inputs["Vector"])
-    vr = nt.nodes.new("ShaderNodeValToRGB")
-    vr.location = (-660, -420)
-    vr.color_ramp.elements[0].position = 0.013
-    vr.color_ramp.elements[0].color = (1, 1, 1, 1)
-    vr.color_ramp.elements[1].position = 0.030
-    vr.color_ramp.elements[1].color = (0, 0, 0, 1)
-    nt.links.new(v.outputs["Distance"], vr.inputs["Fac"])
-    mixs = nt.nodes.new("ShaderNodeMixRGB")
-    mixs.location = (-180, 20)
-    mixs.inputs["Color2"].default_value = (0.90, 0.87, 0.80, 1)
-    nt.links.new(vr.outputs["Color"], mixs.inputs["Fac"])
-    nt.links.new(mixw.outputs["Color"], mixs.inputs["Color1"])
-    nt.links.new(mixs.outputs["Color"], b.inputs["Base Color"])
+    def mix(y, fac_out, c1_out, color2, blend="MIX", fac=None):
+        m = nt.nodes.new("ShaderNodeMixRGB")
+        m.location = (-700, y)
+        m.blend_type = blend
+        if color2 is not None:
+            m.inputs["Color2"].default_value = (*color2, 1.0)
+        if fac_out is not None:
+            nt.links.new(fac_out, m.inputs["Fac"])
+        elif fac is not None:
+            m.inputs["Fac"].default_value = fac
+        if c1_out is not None:
+            nt.links.new(c1_out, m.inputs["Color1"])
+        return m
 
-    g = nt.nodes.new("ShaderNodeTexNoise")
-    g.location = (-900, -680)
-    g.inputs["Scale"].default_value = 140.0
-    g.inputs["Detail"].default_value = 14.0
-    nt.links.new(tc.outputs["Object"], g.inputs["Vector"])
+    # --- 1. בסיס: דיונות רחבות, תקופה ~1.4 מטר.
+    #     הצבעים חמים ורוויים בכוונה; AgX יוריד מהם, ואם מתחילים
+    #     מבז' "מדויק" מסיימים באפור.
+    dune = noise(0.72, 5.0, 320, rough=0.48)
+    dune_r = ramp(dune.outputs["Fac"], 320,
+                  0.26, (0.408, 0.272, 0.118),
+                  0.76, (0.880, 0.735, 0.452))
+
+    # --- 2. אדוות רוח: **השכבה שמכריעה**. תקופה ~35 ס"מ.
+    #     Noise מתוח בציר אחד דרך Mapping נותן פסים מכווננים
+    #     ולא כתמים - כך נראות אדוות שנוצרו מרוח בכיוון אחד.
+    rip_map = nt.nodes.new("ShaderNodeMapping")
+    rip_map.location = (-1400, 60)
+    rip_map.inputs["Scale"].default_value = (1.0, 0.22, 1.0)
+    rip_map.inputs["Rotation"].default_value = (0.0, 0.0, math.radians(17.0))
+    nt.links.new(src, rip_map.inputs["Vector"])
+    rip = nt.nodes.new("ShaderNodeTexNoise")
+    rip.location = (-1250, 60)
+    rip.inputs["Scale"].default_value = 2.85
+    rip.inputs["Detail"].default_value = 7.0
+    rip.inputs["Roughness"].default_value = 0.42
+    nt.links.new(rip_map.outputs["Vector"], rip.inputs["Vector"])
+    rip_r = ramp(rip.outputs["Fac"], 60,
+                 0.38, (0.300, 0.196, 0.082),
+                 0.62, (0.935, 0.820, 0.560))
+    base = mix(160, None, dune_r.outputs["Color"], None,
+               blend="OVERLAY", fac=0.52)
+    nt.links.new(rip_r.outputs["Color"], base.inputs["Color2"])
+
+    # --- 3. גרגר דק. מועיל רק בחזית הקאדר, ולכן משקלו נמוך -
+    #     אבל הוא מה שמונע "פלסטיק" במטר הראשון.
+    grain = noise(26.0, 10.0, -180, rough=0.70)
+    grain_r = ramp(grain.outputs["Fac"], -180,
+                   0.40, (0.62, 0.52, 0.36),
+                   0.60, (1.00, 0.96, 0.86))
+    g_mix = mix(-120, None, base.outputs["Color"], None,
+                blend="SOFT_LIGHT", fac=0.34)
+    nt.links.new(grain_r.outputs["Color"], g_mix.inputs["Color2"])
+
+    # --- 4. לחות. תקופה ~6 מטר. חול רטוב הוא כהה **וקר**, ולכן
+    #     המסכה הזו משמשת גם לצבע וגם ל-Roughness - הברק הוא
+    #     חצי מהסיפור.
+    wet = noise(0.17, 4.0, -420, rough=0.40)
+    wet_r = ramp(wet.outputs["Fac"], -420, 0.40, (0, 0, 0), 0.70, (1, 1, 1))
+    w_mix = mix(-360, wet_r.outputs["Color"], g_mix.outputs["Color"],
+                (0.118, 0.086, 0.060))
+
+    # --- 5. הזרקת רוויה, נגד AgX.
+    hs = nt.nodes.new("ShaderNodeHueSaturation")
+    hs.location = (-380, -60)
+    hs.inputs["Saturation"].default_value = 1.58
+    hs.inputs["Value"].default_value = 1.12
+    nt.links.new(w_mix.outputs["Color"], hs.inputs["Color"])
+    nt.links.new(hs.outputs["Color"], b.inputs["Base Color"])
+
+    # --- 6. Roughness מונע מהלחות: 0.94 יבש, 0.21 רטוב.
+    rr = nt.nodes.new("ShaderNodeMapRange")
+    rr.location = (-380, -420)
+    rr.inputs["To Min"].default_value = 0.94
+    rr.inputs["To Max"].default_value = 0.21
+    nt.links.new(wet_r.outputs["Color"], rr.inputs["Value"])
+    nt.links.new(rr.outputs["Result"], b.inputs["Roughness"])
+    # חול רטוב מחזיר השתקפות רחבה. ``Specular`` מוריד אותה ביבש.
+    for k in ("Specular IOR Level", "Specular"):
+        if k in b.inputs:
+            sp = nt.nodes.new("ShaderNodeMapRange")
+            sp.location = (-380, -560)
+            sp.inputs["To Min"].default_value = 0.22
+            sp.inputs["To Max"].default_value = 0.62
+            nt.links.new(wet_r.outputs["Color"], sp.inputs["Value"])
+            nt.links.new(sp.outputs["Result"], b.inputs[k])
+            break
+
+    # --- 7. Bump, **רק למיקרו**. הגסות כבר בגאומטריה
+    #     (``sand_plane``), ולכן Bump כאן אינו מנסה לייצר דיונות -
+    #     הוא רק מחספס את פני התא. Bump שמנסה להחליף גאומטריה
+    #     נראה כמו הטבעה על פלסטיק, וזה מה שהיה כאן קודם.
+    bump_n = noise(34.0, 12.0, -700, rough=0.66)
     bp = nt.nodes.new("ShaderNodeBump")
-    bp.location = (-180, -620)
-    bp.inputs["Strength"].default_value = 1.0
-    bp.inputs["Distance"].default_value = 0.020
-    nt.links.new(g.outputs["Fac"], bp.inputs["Height"])
-    nt.links.new(bp.outputs["Normal"], b.inputs["Normal"])
-    b.inputs["Roughness"].default_value = 0.90
+    bp.location = (-380, -700)
+    bp.inputs["Strength"].default_value = 0.65
+    bp.inputs["Distance"].default_value = 0.012
+    nt.links.new(bump_n.outputs["Fac"], bp.inputs["Height"])
+    # אדוות גם ב-Bump, בעוצמה נמוכה: הגאומטריה נותנת את הצורה,
+    # ה-Bump מוסיף לה קצה.
+    bp2 = nt.nodes.new("ShaderNodeBump")
+    bp2.location = (-180, -700)
+    bp2.inputs["Strength"].default_value = 0.42
+    bp2.inputs["Distance"].default_value = 0.028
+    nt.links.new(rip.outputs["Fac"], bp2.inputs["Height"])
+    nt.links.new(bp.outputs["Normal"], bp2.inputs["Normal"])
+    nt.links.new(bp2.outputs["Normal"], b.inputs["Normal"])
     nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat
 
@@ -1405,7 +1559,10 @@ def build(a):
     world_hdri(Path(a.hdri))
     add_sun()
 
-    sand = plane("sand", 120.0, (0.0, -55.0, 0.0))
+    # **גריד ולא מישור.** ``plane`` נותן ארבעה קודקודים, וחול
+    # בארבעה קודקודים אינו מטיל צל על עצמו - ולכן הוא נקרא
+    # כרצפה יצוקה בכל פריים מבחן עד כה, ולא משנה מה בשיידר.
+    sand = sand_plane("sand", 120.0, (0.0, -55.0, 0.0))
     sand.data.materials.append(sand_material())
     wmat, waves = water_material()
     water = plane("water", 500.0, (0.0, 120.0, -0.02))
@@ -1431,18 +1588,28 @@ def build(a):
         # **עקומה חלקה בזווית** סביב הגו (ראה ``build_groups``),
         # ולכן אין קו אופקי בכלל.
         # דמות א': בנדו + תחתון, פונה אל ב'.
+        # **בלונדינית, עור בהיר.** צבע השיער הקודם (0.072,0.034,
+        # 0.016) הוא חום כהה כמעט שחור - נמדד בפריים כגוש אפל.
+        # בלונדיני בשיידר ``COLOR`` אינו "צהוב": זהו ערוץ אדום
+        # גבוה, ירוק בשני שליש ממנו וכחול נמוך, כלומר גוון ענבר
+        # בהיר. ``Radial Roughness`` עושה את השאר.
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
-         "tone": (0.905, 0.735, 0.615), "flush": (0.78, 0.33, 0.29),
-         "hair": (0.072, 0.034, 0.016), "hair_len": 0.082,
+         "tone": (0.932, 0.782, 0.676), "flush": (0.80, 0.37, 0.33),
+         "hair": (0.760, 0.545, 0.242), "hair_len": 0.082,
          "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000,
          "swim": {"top_z": 0.737, "top_w": 0.049, "top_wave": 0.017,
                   "hip_z": 0.548, "leg_z": 0.452, "hip_wave": 0.020}},
         # דמות ב': אותו עיצוב, חיתוך מעט שונה - לא אותו בגד.
+        # **גם היא בלונדינית ובעלת עור בהיר.** הטון הקודם
+        # (0.545,0.375,0.275) הוא עור כהה, והבקשה היא שתי
+        # דמויות בהירות. ההפרדה ביניהן נשמרת בגוון ולא בבהירות:
+        # כאן השיער פלטינה-חולי (קר) ושם ענבר (חם), וההבדל
+        # ניכר בפריים בלי ששתיהן ייראו זהות.
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
          "turn": math.radians(8.0), "garment": "swim",
-         "tone": (0.545, 0.375, 0.275), "flush": (0.62, 0.27, 0.23),
-         "hair": (0.022, 0.014, 0.010), "hair_len": 0.104,
+         "tone": (0.902, 0.748, 0.652), "flush": (0.74, 0.32, 0.30),
+         "hair": (0.845, 0.700, 0.418), "hair_len": 0.104,
          "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962,
          "swim": {"top_z": 0.744, "top_w": 0.055, "top_wave": 0.013,
                   "hip_z": 0.561, "leg_z": 0.466, "hip_wave": 0.026}},
