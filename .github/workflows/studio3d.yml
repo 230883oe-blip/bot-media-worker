@@ -133,7 +133,8 @@ jobs:
             --hdri hdri/beach.hdr --out artifacts/nomaps \
             --start 1 --end 1 --total ${TOTAL} \
             --samples 8 --width 320 --height 180 \
-            2>&1 | grep -E "זיכרון|Peak|Error" | tail -20 | tee artifacts/mem_nomaps.txt
+            2>&1 | grep -E "זיכרון|Finished|Error" | tail -12 \
+            | tee artifacts/mem_nomaps.txt
           free -m | tee -a artifacts/mem_nomaps.txt
       - name: שני פריימים קטנים
         run: |
