@@ -1471,14 +1471,24 @@ def build(a):
         # קודם, ומכאן גם שהבגד נבנה אחריו - כדי שיירש את משקלי
         # הדפורמציה שלו.
         arm = build_rig(body, h)
+        # **השיער לפני ה-SUBSURF, וזו החלטת זיכרון שנמדדה.**
+        # בסדר הקודם (SUBSURF -> PARTICLE) הגדילים גודלו על
+        # הרשת שאחרי שתי רמות חלוקה - 169 אלף פאות במקום 10.5
+        # אלף - ומבני האינטרפולציה של 67,200 הבנים נבנו עליה.
+        # הריצות 38523912537 ו-38524...  נהרגו בשיא של כ-13GB
+        # מתוך 16, **גם בלי מפות העור**: נמדד בשלב "בסיס זיכרון"
+        # בשרשרת. ARMATURE -> PARTICLE -> SUBSURF נותן אותו שיער
+        # בדיוק (הדפורמציה של הריג כבר הוחלה לפניו), ומוציא את
+        # הרשת המחולקת מהנתיב הזה לגמרי.
+        add_hair(body, s["hair_len"], s["hair"],
+                 children=a.hair_children)
         sub = body.modifiers.new("sub", "SUBSURF")
         sub.levels = 0
-        sub.render_levels = 2
+        sub.render_levels = a.subdiv
         sub.use_limit_surface = True
         garment = make_garment(
             body, groups[s["garment"]], "cloth_" + s["tag"],
             cloth_material("fabric_" + s["tag"], s["cloth"]))
-        add_hair(body, s["hair_len"], s["hair"])
 
         root = arm if arm else body
         # העיניים: ``ARMATURE`` עם קבוצה בשם העצם ובמשקל 1, ולא
@@ -1546,6 +1556,11 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=48)
     ap.add_argument("--width", type=int, default=960)
     ap.add_argument("--height", type=int, default=540)
+    ap.add_argument("--subdiv", type=int, default=2,
+                    help="רמות חלוקה ברינדור. 2=חלק, 1=חצי זיכרון")
+    ap.add_argument("--hair-children", type=int, default=16,
+                    dest="hair_children",
+                    help="בנים לכל אם. סך הגדילים = 4200 × זה")
     ap.add_argument("--skin", default="",
                     help="תיקיית ערכת מפות העור (skinmaps.py). "
                          "ריק = חומר פרוצדורלי בלבד")
