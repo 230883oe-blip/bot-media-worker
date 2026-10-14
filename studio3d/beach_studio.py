@@ -221,7 +221,7 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
     vs = vlist(body)
     xs = [abs(v.x) for v in vs]
     xmax = max(xs) or 1.0
-    scalp, chest, swim, crop = {}, {}, {}, {}
+    scalp, chest, swim, crop, hairlen = {}, {}, {}, {}, {}
     sw = swimcut or {}
     cut_tz = float(sw.get("top_z", 0.737))     # מרכז העליון (יחס גובה)
     cut_tw = float(sw.get("top_w", 0.049))     # חצי-רוחב העליון
@@ -242,10 +242,43 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         #     בחזית: הוא מתחיל גבוה יותר מעל הגבות מאשר בעורף.
         #     ``front`` הוא 1 בחזית המלאה ו-0 בעורף, והוא מרים
         #     את הסף ב-3.4% מגובה הגוף - כ-6 ס"מ של מצח פנוי.
+        #     **הקרקפת הורחבה אחורה ומטה.** עם ``lo=0.915``
+        #     בעורף, השיער צמח רק מכיפה עליונה קטנה - וכיפה
+        #     עליונה שגדילים צומחים ממנה לפי הנורמל היא, בהגדרה,
+        #     חצי כדור. כדי שתהיה תסרוקת צריך שיער גם במקום
+        #     שבו הנורמל כבר פונה **אחורה ומטה**, כלומר בעורף
+        #     ובצדדים: שם 0.874, ובחזית 0.950 (מצח פנוי).
+        #     **הורחבה אחורה, ונמדד שזה כיסה פנים.** עם
+        #     ``lo=0.874`` בעורף השיער צמח גם מגובה האוזן,
+        #     ובאורך 9-11 ס"מ המעטפת סגרה על הפנים לגמרי.
+        #     0.908 הוא הפשרה שנמדדה: מעט יותר שיער בעורף
+        #     מהמקור (0.915) בלי להגיע לקו הגבות.
         front = max(0.0, min(1.0, (v.y * fdir) / 0.075))
-        lo = 0.915 + 0.034 * front
+        lo = 0.908 + 0.068 * front
         if zr > lo:
-            scalp[i] = smoothstep(lo, lo + 0.037, zr)
+            scalp[i] = smoothstep(lo, lo + 0.030, zr)
+            #     **אורך משתנה לכל גדיל** דרך ``vertex_group_length``.
+            #     זה הכלי שבאמת שובר את הכדור: גדיל באורך אחיד
+            #     מקרקפת כדורית בונה כדור גדול יותר, ולא משנה
+            #     כמה clump יש עליו. כאן הכתר קצוץ (0.38 מהאורך)
+            #     והעורף מלא (1.0), ולכן המעטפת מוארכת כלפי מטה
+            #     ואחורה במקום להתנפח סימטרית.
+            tt = max(0.0, min(1.0, (zr - lo) / max(1e-6, 1.0 - lo)))
+            # **הכיוון, ולא רק הגובה.** ``(1-0.62*tt)*(1-0.42*front)``
+            # קיצר את הכתר ואת החזית - ולא קיצר כלום בצדדים.
+            # גדיל צומח לפי הנורמל, והנורמל בצד הראש פונה
+            # **הצידה**, ולכן 6-7 ס"מ שם הם 6-7 ס"מ של רוחב
+            # שנוסף לראש משני הצדדים. זה, ולא ה-kink, מה שנמדד
+            # בפריים של 14/10 כ"כדור אפרו".
+            #
+            # ``backness`` הוא 1 בעורף ו-0 בחזית. אורך מלא רק
+            # שם - שם הנורמל פונה אחורה ומטה, כלומר הגדיל
+            # **יורד** ובונה תסרוקת במקום להתנפח. הכתר, החזית
+            # והצדדים מקבלים 16% מהאורך, שזה קרוב לצמוד.
+            backness = max(0.0, min(1.0,
+                                    (-(v.y * fdir) + 0.028) / 0.088))
+            hl = (0.16 + 0.84 * backness) * (1.0 - 0.58 * tt)
+            hairlen[i] = max(0.10, min(1.0, hl))
         # --- חזה: טבעת סביב 0.73h בחצי הקדמי. משקל גאוסיאני
         #     בשני צירים, כך שההגדלה חלקה ואינה יוצרת תפר.
         if 0.665 < zr < 0.805 and v.y * fdir > -0.02:
@@ -258,7 +291,11 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         # יושבות בדיוק בגובה האגן - ולכן כפות הידיים יצאו
         # צבועות בכחול ובוורוד. ``xmax`` הוא קצה האצבעות
         # בפרישה, והגו הוא כ-45% ממנו.
-        torso = abs(v.x) < xmax * 0.46
+        # 0.30 ולא 0.46: ב-0.46 רצועות הביקיני הדקות החדשות
+        # תפסו את הזרוע ב-A-pose (היא יושבת בגובה האגן),
+        # והפריים הראה רצועה כחולה שעוברת על הכתף. הגו הוא
+        # כ-30% מפרישת האצבעות.
+        torso = abs(v.x) < xmax * 0.40
         # **קו הגזירה חייב להיות אורגני.** גבול לפי ``zr`` קשיח
         # נותן קצה שעובר באותו גובה סביב כל הגוף, והוא נראה
         # כמדרגות על רשת quads. השער מדד את זה ישירות:
@@ -288,22 +325,92 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         #     ±pi/2 בצדדים, pi מאחור. כל קצה הוא ``z(th)``
         #     חלקה ורציפה (cos בלבד, ולכן אינה נסגרת בקפיצה),
         #     ובכך אין בבגד אף קו אופקי.
+        # **``th`` נמדדת מציר ה-X, כלומר אפס הוא הצד ולא
+        # החזית.** זה הפיל את הגביעים: ``cos(th)`` הוא 1 בצד
+        # הגוף ו-0 בחזית, ולכן הנוסחה שבנתה גביע "במקום שבו
+        # cos גדול" בנתה אותו בדיוק מעל הזרועות. בפריים זה
+        # נראה כשני פסים אנכיים ליד הכתפיים.
+        # ``fwd = sin(th)`` הוא הרכיב הקדמי האמיתי (1 בחזית,
+        # 0 בצדדים, שלילי מאחור), ו-``sid = |cos(th)|`` הוא
+        # הרכיב הצדי. שני הגדלים האלה, ולא c1/c2, הם מה
+        # שעקומות הגזירה צריכות.
         th = math.atan2(v.y * fdir, v.x if abs(v.x) > 1e-6 else 1e-6)
         c1, c2 = math.cos(th), math.cos(2.0 * th)
-        # עליון בנדו: רחב בצדדים (רצועה), צר במרכז הקדמי.
-        hw = cut_tw + cut_wave * (-c2)
-        if torso and abs(zj - cut_tz) < hw:
+        fwd = math.sin(th)
+        sid = abs(math.cos(th))
+        # --- עליון: **גביעי משולש, לא בנדו.** הנוסחה הקודמת
+        #     ``hw = cut_tw + cut_wave*(-c2)`` נתנה חצי-רוחב של
+        #     3-6.6 ס"מ **בכל זווית** - כלומר רצועה אופקית
+        #     ברוחב אחיד שעוטפת את הגו, שזה בדיוק ההגדרה של
+        #     בנדו, וזה מה שנמדד בפריים. ביקיני הוא ההפך: רוחב
+        #     גדול בחזית בלבד (הגביע מכסה את השד), ורצועה דקה
+        #     בצדדים ובגב שרק מחזיקה אותו.
+        #
+        #     ``front`` הוא 1 בחזית ו-0 בצדדים/גב. החזקה 1.7
+        #     מצמצמת את הגביע מהר ככל שמתרחקים מהמרכז, ולכן
+        #     המעבר גביע->רצועה קורה סביב 55° - קו התפר הטבעי.
+        #     ``zc`` מוריד את מרכז הגביע ב-3.4% בחזית: זה מה
+        #     שהופך מלבן למשולש שמחודד כלפי מטה.
+        fr = max(0.0, fwd)
+        # **שני משולשים נפרדים, ולא רצועה אחת.** הנוסחה הקודמת
+        # (``hw = 0.0135 + 0.0620*cup`` סביב ``zc``) הייתה רציפה
+        # בכל הזוויות, כולל **בעצם החזה** - כלומר שני ה"גביעים"
+        # נגעו זה בזה במרכז והתאחדו לחתיכת בד אחת שעוטפת את
+        # הגו. בפריים של 14/10 זה נמדד בדיוק כך: רצועה אופקית
+        # אחת, שזו ההגדרה של בנדו. ובנוסף רצועת הגב עברה גם
+        # בחזית ו"ריתכה" את השניים גם אילו היו נפרדים.
+        #
+        # כאן הגביע נבנה סביב **מרכז השד** (``cxx``, אותם
+        # מספרים של קבוצת ``chest`` - אחרת הבד יושב לידו ולא
+        # עליו), יש רווח מפורש בעצם החזה, והקצה התחתון מתחדד
+        # אל אפס בשני צדי הגביע - כלומר משולש שקודקודו למטה.
+        bx = abs(v.x)
+        cxx, cw = 0.072, 0.064
+        t_cup = 1.0 - min(1.0, abs(bx - cxx) / cw)
+        if torso and fwd > 0.02 and bx > 0.016 and t_cup > 0.0:
+            z_up = cut_tz + 0.028 * (t_cup ** 0.45)
+            z_dn = cut_tz - 0.052 * (t_cup ** 1.25)
+            if z_dn < zj < z_up:
+                swim[i] = 1.0
+        # רצועת הגב/צד: דקה, **ורק מאחור ובצדדים**. ``fwd<0.34``
+        # הוא כ-70° מהחזית והלאה, כלומר היא מתחילה מעבר לקצה
+        # החיצוני של הגביע ולכן אינה חוצה את החזה.
+        if torso and fwd < 0.34 and abs(zj - cut_tz) < 0.0130:
             swim[i] = 1.0
-        # תחתון: קו המותן יורד מלפנים ועולה במותניים, וקו
-        # הרגל גבוה בצדדים - שתי עקומות, שתיהן חלקות.
-        z_hi = cut_hz - cut_hw * 0.55 * c1
-        z_lo = cut_lz + cut_hw * c2 * 0.5
+        # רצועות צוואר: מקצה הגביע כלפי מעלה ופנימה. בלעדיהן
+        # שני המשולשים נראים מודבקים על הגוף בלי מה שמחזיק
+        # אותם. חצי-רוחב 1.5 ס"מ ולא פחות: ``make_garment``
+        # מוחק פאה שאחד מקודקודיה אינו בקבוצה, ועל רשת של
+        # ~1.3 ס"מ רצועה צרה מזה מתפרקת לקודקודים בלי פאות -
+        # כלומר נעלמת בשקט.
+        if torso and cut_tz < zr < 0.858 and fwd > -0.10:
+            tt_s = (zr - cut_tz) / (0.858 - cut_tz)
+            if abs(bx - cxx * (1.0 - 0.52 * tt_s)) < 0.015:
+                swim[i] = 1.0
+        # --- תחתון: **גזרת רגל גבוהה, לא מכנסון.** קודם
+        #     ``z_lo`` היה קבוע כמעט (0.452 ± 1 ס"מ), כלומר
+        #     קצה תחתון אופקי שחוצה את הירך - מכנסון, וכך זה
+        #     נראה. בביקיני קו הרגל **עולה** בצדדים אל מעל
+        #     עצם האגן ויורד רק במרכז (מפשעה), ולכן ההפרש
+        #     בין הצד לחזית הוא 10 ס"מ ולא 1.
+        #
+        #     ``side`` הוא 1 בצדדים ו-0 בחזית/גב. בצדדים
+        #     ``z_lo`` עולה מעל ``z_hi``, כלומר הבד נעלם שם
+        #     לגמרי ונשארת רק רצועת המותן - וזה בדיוק המראה
+        #     של high-cut.
+        z_lo = cut_lz + 0.082 * (sid ** 0.75)
+        z_hi = cut_hz - 0.024 * fr
         if torso and z_lo < zj < z_hi:
+            swim[i] = 1.0
+        # רצועת מותן דקה: מה שמחזיק את התחתון כשהבד נעלם
+        # בצדדים. בלעדיה הייתי מקבל שני משולשים לא מחוברים.
+        if torso and abs(zj - cut_hz) < 0.0125:
             swim[i] = 1.0
     vgroup(body, "scalp", scalp)
     vgroup(body, "chest", chest)
+    vgroup(body, "hairlen", hairlen)
     return {"scalp": scalp, "chest": chest, "swim": swim, "crop": crop,
-            "xmax": xmax}
+            "hairlen": hairlen, "xmax": xmax}
 
 
 # ------------------------------------------------------------------ פיסול
@@ -608,8 +715,12 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
     r1 = nt.nodes.new("ShaderNodeValToRGB")
     r1.location = (-500, 200)
     r1.color_ramp.elements[0].position = 0.35
-    r1.color_ramp.elements[0].color = (tone[0] * 0.80, tone[1] * 0.82,
-                                       tone[2] * 0.88, 1.0)
+    # הקצה הכהה של וריאציית הטון היה 80% מה-``tone``. בשרשרת
+    # שמכפילה גם קאוויטי וגם אלבדו מצולם, כל מקדם כזה מצטבר -
+    # ולכן כאן 0.90 ולא 0.80. וריאציה של 10% מספיקה כדי לשבור
+    # אחידות; 20% כבר נקראת כצל.
+    r1.color_ramp.elements[0].color = (tone[0] * 0.90, tone[1] * 0.91,
+                                       tone[2] * 0.94, 1.0)
     r1.color_ramp.elements[1].position = 0.70
     r1.color_ramp.elements[1].color = (min(1.0, tone[0] * 1.10),
                                        tone[1] * 1.02, tone[2] * 0.95, 1.0)
@@ -630,6 +741,9 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
     mx = nt.nodes.new("ShaderNodeMixRGB")
     mx.location = (-250, 100)
     mx.blend_type = "SOFT_LIGHT"
+    # SOFT_LIGHT ב-Fac מלא היה עדין מדי אחרי ההבהרה והעור
+    # קרא כגבס. ``r2`` כבר מגביל את האזור, ולכן העצמה כאן
+    # רק מחזירה את החום לאותם אזורים.
     mx.inputs["Color2"].default_value = (*flush, 1.0)
     nt.links.new(r2.outputs["Color"], mx.inputs["Fac"])
     nt.links.new(r1.outputs["Color"], mx.inputs["Color1"])
@@ -654,11 +768,21 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
     # מצייר תווי פנים שאינם שם - הוא רק מפסיק להסתיר אותם.
     geo = nt.nodes.new("ShaderNodeNewGeometry")
     geo.location = (-980, -660)
+    # **כאן נולד העור האפרפר, וזו הייתה טעות חשבון ולא טעות טעם.**
+    # ``Pointiness`` של רשת אורגנית מתפלג סביב 0.5, והרמפה
+    # 0.42->0.56 מיפתה בדיוק את המרכז הזה אל אמצע הטווח שבין
+    # 0.30 ל-1.0 - כלומר מקדם של כ-0.55 על **רוב** פני הגוף,
+    # לא על חריצים. עם ``Fac=0.85`` זה חתך כמחצית מהבהירות של
+    # העור כולו, וה-``tone`` הבהיר (0.93,0.78,0.68) הגיע אל
+    # ה-AgX כ-(0.52,0.44,0.38) - עור כהה-אפרפר, בדיוק מה
+    # שנמדד בפריים. הקאוויטי צריך לכהות **רק** את הזנב התחתון
+    # של ההתפלגות: רצפה של 0.66 במקום 0.30, טווח צר יותר
+    # שמוזז מטה, ו-Fac חצי. כך הקמט נשאר והעור לא נצבע.
     cav = nt.nodes.new("ShaderNodeValToRGB")
     cav.location = (-700, -660)
-    cav.color_ramp.elements[0].position = 0.42
-    cav.color_ramp.elements[0].color = (0.30, 0.22, 0.20, 1.0)
-    cav.color_ramp.elements[1].position = 0.56
+    cav.color_ramp.elements[0].position = 0.30
+    cav.color_ramp.elements[0].color = (0.66, 0.58, 0.55, 1.0)
+    cav.color_ramp.elements[1].position = 0.49
     cav.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
     base = mx
     if "Pointiness" in geo.outputs:
@@ -666,7 +790,7 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
         mul = nt.nodes.new("ShaderNodeMixRGB")
         mul.location = (-60, 60)
         mul.blend_type = "MULTIPLY"
-        mul.inputs["Fac"].default_value = 0.85
+        mul.inputs["Fac"].default_value = 0.45
         nt.links.new(mx.outputs["Color"], mul.inputs["Color1"])
         nt.links.new(cav.outputs["Color"], mul.inputs["Color2"])
         nt.links.new(mul.outputs["Color"], bsdf.inputs["Base Color"])
@@ -677,8 +801,8 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
     rg.inputs["Scale"].default_value = 22.0
     rr = nt.nodes.new("ShaderNodeMapRange")
     rr.location = (-450, -520)
-    rr.inputs["To Min"].default_value = 0.34
-    rr.inputs["To Max"].default_value = 0.58
+    rr.inputs["To Min"].default_value = 0.38
+    rr.inputs["To Max"].default_value = 0.62
     nt.links.new(rg.outputs["Fac"], rr.inputs["Value"])
     nt.links.new(rr.outputs["Result"], bsdf.inputs["Roughness"])
 
@@ -765,14 +889,19 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
 
     # שמות קלטי ה-SSS השתנו בין 3.x ל-4.x. ניסיון לפי שם, ובלי
     # ליפול אם אחד מהם אינו קיים בגרסה שרצה.
-    for key, val in (("Subsurface Weight", 0.22), ("Subsurface", 0.22)):
+    # SSS הועלה מ-0.22 ל-0.34 ורדיוס האדום מ-3.6 ל-5.4 מ"מ.
+    # זה מה שנותן את ה"עומק" שהתבקש: אור שנכנס לעור, מתפזר
+    # בתוכו ויוצא אדמדם בקצוות דקים (אוזניים, אצבעות, קו הלסת).
+    # בעור בהיר האפקט ניכר יותר מאשר בכהה, ולכן ערך שהיה
+    # מאוזן לטון הכהה הקודם קרא כפלסטיק אחרי ההבהרה.
+    for key, val in (("Subsurface Weight", 0.34), ("Subsurface", 0.34)):
         if key in bsdf.inputs:
             bsdf.inputs[key].default_value = val
             break
     for key in ("Subsurface Radius",):
         if key in bsdf.inputs:
-            bsdf.inputs[key].default_value = (0.036, 0.013, 0.008)
-    for key, val in (("Subsurface Scale", 0.035),):
+            bsdf.inputs[key].default_value = (0.054, 0.021, 0.013)
+    for key, val in (("Subsurface Scale", 0.055),):
         if key in bsdf.inputs:
             bsdf.inputs[key].default_value = val
     for key, val in (("Specular IOR Level", 0.42), ("Specular", 0.42)):
@@ -910,7 +1039,8 @@ def _set(obj, **kw):
     return missing
 
 
-def add_hair(body, length: float, col, count=4200, children=16):
+def add_hair(body, length: float, col, count=4200, children=16,
+             density="scalp", shell_mat=None):
     """שיער כגאומטריה, לא כמשטח מוצק.
 
     מערכת חלקיקים ולא Curves: ב-4.2 ``curves_empty_hair_add`` דורש
@@ -932,7 +1062,16 @@ def add_hair(body, length: float, col, count=4200, children=16):
     """
     md = body.modifiers.new("hair", "PARTICLE_SYSTEM")
     ps = body.particle_systems[-1]
-    ps.vertex_group_density = "scalp"
+    if density and density in [g.name for g in body.vertex_groups]:
+        ps.vertex_group_density = density
+    # **אורך לכל גדיל, ולא אורך אחיד.** ראה ``build_groups``:
+    # זה מה שמונע מהמעטפת להיות כדור. השם חייב להתקיים על
+    # האובייקט, אחרת בלנדר שותק והאורך נשאר אחיד - תקלה
+    # שקטה מהסוג שמוצאים רק בפריים.
+    if "hairlen" in [g.name for g in body.vertex_groups]:
+        ps.vertex_group_length = "hairlen"
+    else:
+        log("    אזהרה: אין קבוצת hairlen - אורך השיער יישאר אחיד")
     s = ps.settings
     # **``clump_factor`` גבוה הוא מה שהופך קיפוד לתספורת.** בלי
     # סימולציית כבידה הגדיל צומח לפי נורמל הקרקפת, כלומר רדיאלית
@@ -949,8 +1088,18 @@ def add_hair(body, length: float, col, count=4200, children=16):
          # ``child_length`` מקצר את הבנים ביחס לאמהות, ולכן
          # המעטפת החיצונית (שהיא מה שהעין רואה) נדחסת פנימה
          # בלי לדלל את השיער עצמו.
-         child_length=0.74, child_radius=0.013,
-         clump_factor=0.97, clump_shape=0.62,
+         # אחרי ``comb_hair`` הנפח כבר לא כדורי, ולכן אין עוד
+         # צורך לדחוס את הבנים פנימה: 0.94 במקום 0.74 מחזיר
+         # לשיער אורך אמיתי. ו-``clump`` ירד מ-0.97 ל-0.70 -
+         # clump כמעט מלא על גדילים מסורקים אוסף הכול לקווצות
+         # חדות שנראות כחבלים.
+         # 0.66 ולא 0.76, ו-``clump`` 0.985 ולא 0.95: המעטפת
+         # החיצונית היא מה שהעין קוראת כנפח, והבנים הם שבונים
+         # אותה. ``clump`` כמעט מלא מושך כל בן אל קצה האם, ולכן
+         # הנפח נקבע על ידי האמהות (שאורכן כבר מכוון לפי
+         # ``hairlen``) ולא על ידי פיזור הבנים.
+         child_length=0.66, child_radius=0.010,
+         clump_factor=0.985, clump_shape=0.82,
          roughness_1=0.006, roughness_1_size=0.04,
          roughness_2=0.010, roughness_2_size=0.14,
          roughness_endpoint=0.004,
@@ -960,9 +1109,12 @@ def add_hair(body, length: float, col, count=4200, children=16):
          # המצח. ``WAVE`` מכופף את הגדיל במישור אחד, כלומר גל
          # רך שיורד במקום סליל שמתנפח. התדר הנמוך (1.7 מול 3.0)
          # הוא ההבדל בין גל לקפיץ.
-         kink="WAVE", kink_amplitude=0.011, kink_frequency=1.7,
-         kink_shape=-0.22,
-         root_radius=0.010, tip_radius=0.0015, radius_scale=0.026,
+         # משרעת 5.5 מ"מ ולא 11: ``kink`` מוסיף נפח בכל כיוון,
+         # ועל גדיל שצומח רדיאלית מראש כדורי כל מילימטר שלו
+         # מתווסף לרדיוס המעטפת.
+         kink="WAVE", kink_amplitude=0.0055, kink_frequency=1.8,
+         kink_shape=-0.30,
+         root_radius=0.0085, tip_radius=0.0012, radius_scale=0.019,
          use_close_tip=True)
     # חומר השיער הוא הסלוט השני של הגוף.
     mi = len(body.data.materials)
@@ -971,6 +1123,294 @@ def add_hair(body, length: float, col, count=4200, children=16):
     log("  שיער: %d אמהות × %d בנים = %d גדילים, אורך %.2fמ"
         % (count, children, count * children, length))
     return md
+
+
+def hair_shell_material(name: str, col):
+    """חומר לקליפת השיער: Principled אניזוטרופי, לא Hair BSDF.
+
+    ``ShaderNodeBsdfHairPrincipled`` מחשב פיזור בתוך **גליל**,
+    ולכן על משטח הוא קורא כפלסטיק רטוב. על מש התסרוקת צריך
+    Principled עם ``Anisotropic`` גבוה: ההיילייט נמתח לאורך
+    הטנגנט של המשטח, וזה בדיוק הברק הארוך שהעין מזהה כשיער.
+
+    ה-Bump בתדר גבוה מאוד (Wave בקנה מידה 190) מצייר את
+    הגדילים עצמם - זה מה שמונע מהקליפה להיראות ככובע.
+    """
+    mat = bpy.data.materials.new(name)
+    nt, out = _nodes(mat)
+    b = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    b.location = (400, 0)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-900, 0)
+    # וריאציה בין גדיל לגדיל: בלונד אמיתי אינו צבע אחד אלא
+    # תערובת של כמה גוונים. בלעדיה הראש נקרא כגוש צבוע.
+    wv = nt.nodes.new("ShaderNodeTexWave")
+    wv.location = (-700, 120)
+    wv.wave_type = "BANDS"
+    wv.bands_direction = "Z"
+    wv.inputs["Scale"].default_value = 190.0
+    wv.inputs["Distortion"].default_value = 9.0
+    wv.inputs["Detail"].default_value = 5.0
+    nt.links.new(tc.outputs["Object"], wv.inputs["Vector"])
+    rp = nt.nodes.new("ShaderNodeValToRGB")
+    rp.location = (-450, 120)
+    rp.color_ramp.elements[0].position = 0.30
+    rp.color_ramp.elements[0].color = (col[0] * 0.52, col[1] * 0.46,
+                                       col[2] * 0.40, 1.0)
+    rp.color_ramp.elements[1].position = 0.72
+    rp.color_ramp.elements[1].color = (min(1.0, col[0] * 1.14),
+                                       min(1.0, col[1] * 1.10),
+                                       min(1.0, col[2] * 1.02), 1.0)
+    nt.links.new(wv.outputs["Fac"], rp.inputs["Fac"])
+    nt.links.new(rp.outputs["Color"], b.inputs["Base Color"])
+    bp = nt.nodes.new("ShaderNodeBump")
+    bp.location = (150, -260)
+    bp.inputs["Strength"].default_value = 0.72
+    bp.inputs["Distance"].default_value = 0.0016
+    nt.links.new(wv.outputs["Fac"], bp.inputs["Height"])
+    nt.links.new(bp.outputs["Normal"], b.inputs["Normal"])
+    b.inputs["Roughness"].default_value = 0.31
+    for k, v in (("Anisotropic", 0.82), ("Anisotropic Rotation", 0.0),
+                 ("Specular IOR Level", 0.55), ("Specular", 0.55),
+                 ("Metallic", 0.0)):
+        if k in b.inputs:
+            b.inputs[k].default_value = v
+    nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
+    return mat
+
+
+def hair_shell(body, h: float, fdir: float, col, drop: float = 0.0,
+               thick: float = 0.016, name: str = "hair_shell",
+               fuzz: int = 6):
+    """תסרוקת כ**גאומטריה**, ולא כגדילים שצומחים מהקרקפת.
+
+    זו החלפת שיטה אחרי שהשיטה הקודמת מוצתה. גדיל חלקיקים צומח
+    לפי הנורמל של הקרקפת, והקרקפת היא חצי כדור - ולכן התוצאה
+    היא תמיד חצי כדור גדול יותר. ``clump``, ``kink``,
+    ``child_length`` ו-``vertex_group_length`` כולם מעצבים את
+    הגדיל **סביב** אותו כיוון ולא משנים אותו, ולכן ארבעה סבבי
+    כוונון החזירו את אותו "אפרו".
+
+    הכיוון ניתן לשינוי רק בכבידה (``use_hair_dynamics`` - בייק
+    שביר ויקר ב-``-b``) או בסירוק ידני של ``hair_keys``. את
+    השני **נמדד כאן שאי אפשר**: ב-4.2 ב-``-b``,
+    ``particle_system.particles`` על האובייקט המקורי נשאר ריק
+    גם אחרי ``disconnect_hair``/``connect_hair`` (שתיהן מחזירות
+    ``FINISHED``), והחלקיקים קיימים רק על העותק המוערך - שאינו
+    ניתן לכתיבה. נמדד בסקריפט בדיקה נפרד, לא נוחש.
+
+    לכן התסרוקת נבנית כמשטח: קליפה שנגזרת מהראש עצמו (ולכן
+    צמודה לו בדיוק), נדחקת החוצה, ואז **נמתחת מטה ואחורה** -
+    כלומר הצורה היא הצורה, ולא תוצאה של כיוון צמיחה. זו גם
+    הדרך שבה נבנה שיער בהפקות אמיתיות.
+
+    בונוס שאינו צדדי: הזיכרון. 51,200 גדילים באורך 20 ס"מ
+    הפילו את הרנדר המקומי ב-8.8GB על ``layerInterp_mdeformvert``.
+    קליפה היא כ-3,000 פאות.
+    """
+    import bmesh                                             # noqa: PLC0415
+    vs = vlist(body)
+    # **מרכז הראש, ולא אפס.** זה הפיל את הניסיון הראשון:
+    # ``build_groups`` מחשב ``front`` כ-``v.y*fdir/0.075``
+    # בהנחה שהראש ממורכז ב-y=0, והוא אינו - הלוג מדווח
+    # "עיניים y=0.026 מול ראש y=-0.074". לכן קודקודי **הפנים**
+    # (y קרוב ל-0) קיבלו ``front=0``, כלומר נחשבו לעורף,
+    # ונמתחו 27 ס"מ כלפי מטה. בפריים זה נראה כמסכה שמכסה
+    # את כל הפנים - תקלה שנראית כבעיית חומר והיא בעיית מערכת
+    # צירים. כאן המרכז נמדד מהקודקודים עצמם.
+    hv = [v for v in vs if v.z / h > 0.880]
+    cy = sum(v.y for v in hv) / max(1, len(hv))
+    keep = set()
+    for i, v in enumerate(vs):
+        zr = v.z / h
+        front = max(0.0, min(1.0, ((v.y - cy) * fdir) / 0.072))
+        # הקליפה יורדת נמוך בעורף (0.858) ונסוגה גבוה בחזית
+        # (0.950) - אותו היגיון של קו שיער אנושי שבקבוצת
+        # ``scalp``, רק עם שוליים רחבים יותר כי כאן זה משטח
+        # ולא נקודות צמיחה.
+        # **חיתוך קשיח מול הפנים.** הניסיון הקודם הגדיר סף
+        # גובה שמשתנה עם ``front``, והמתיחה שאחריו משכה את
+        # הקודקודים האחוריים 27 ס"מ מטה בעוד הקדמיים קפואים -
+        # ולכן **הפאות שחיברו ביניהם** נמתחו באלכסון על פני
+        # הלחיים. בפריים זה נראה כמסכה שמכסה את כל הפנים, וזה
+        # לא היה באג בבחירת הקודקודים אלא בטופולוגיה של המעבר.
+        # כאן כל מה שמול קו הגבות נכלל רק אם הוא כמעט בכתר
+        # (0.972), ולכן אין פאה שחוצה את הפנים מלכתחילה.
+        fy = (v.y - cy) * fdir
+        if fy > 0.030:
+            if zr > 0.972:
+                keep.add(i)
+        elif zr > 0.858 + 0.070 * front:
+            keep.add(i)
+    if len(keep) < 60:
+        log("  קליפת שיער: רק %d קודקודים - מבוטל" % len(keep))
+        return None
+    me = body.data.copy()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    doomed = [bm.verts[i] for i in range(len(bm.verts)) if i not in keep]
+    bmesh.ops.delete(bm, geom=doomed, context="VERTS")
+    bm.normal_update()
+    lo = 0.858
+    for v in bm.verts:
+        # 1. עובי: דחיקה החוצה לאורך הנורמל של **הקליפה**
+        #    (אחרי המחיקה), כדי שלא תחתוך את הגולגולת.
+        v.co += v.normal * 0.013
+        zr = v.co.z / h
+        # רוחב מעבר 0.17 ולא 0.072: המתיחה משתנה בהדרגה על
+        # פני **כל** עומק הראש, ולכן אין זוג קודקודים שכנים
+        # שאחד מהם ירד 27 ס"מ והשני לא זז.
+        front = max(0.0, min(1.0, ((v.co.y - cy) * fdir + 0.045) / 0.170))
+        bk = 1.0 - front
+        # tt: 1 בכתר, 0 בשפה התחתונה של הקליפה.
+        tt = max(0.0, min(1.0, (zr - lo) / max(1e-6, 1.0 - lo)))
+        # 2. **המתיחה.** רק הצד האחורי/הצדדי יורד, והשפה
+        #    יורדת יותר מהכתר - כך נוצר וילון שנופל אל
+        #    הכתפיים במקום כדור. הכתר זז מעט (0.45) כדי שקו
+        #    הראש יישאר עגול ולא ישוטח.
+        d = bk ** 1.15 * (1.0 - 0.55 * tt) * drop
+        v.co.z -= d
+        # 3. הרחבה: בלעדיה השיער נדבק לצוואר ונראה כצעיף.
+        sp = 1.0 + 0.26 * bk * (1.0 - tt)
+        v.co.x *= sp
+        v.co.y -= fdir * 0.016 * bk
+        # 4. גל רך - ההבדל בין תסרוקת לקסדה.
+        v.co.x += 0.009 * math.sin(v.co.z * 34.0) * bk * (1.0 - tt)
+        # 5. **חסם קו הפנים.** בחירת הקודקודים הייתה נכונה
+        #    (נמדד ב-bbox: הקליפה מגיעה קדימה רק בכתר), אבל
+        #    **אחרי** המתיחה קודקודים שישבו בצד הראש ירדו
+        #    27 ס"מ ועברו מול הלחי והסנטר - ולכן הפריים הראה
+        #    גוש שמכסה מהאף ומטה. כאן אין עוד מה לנחש: כל מה
+        #    שנמצא מתחת לגובה העיניים נדחף אל **מאחורי** מרכז
+        #    הראש, בלי תלות באיך הוא הגיע לשם. שיער שיורד
+        #    לכתפיים יורד מאחור ומהצדדים, לא על הפנים.
+        if v.co.z / h < 0.955:
+            cap = -0.020
+            fy2 = (v.co.y - cy) * fdir
+            if fy2 > cap:
+                v.co.y = cy + fdir * cap
+    bm.to_mesh(me)
+    bm.free()
+    for g in body.vertex_groups:
+        ob.vertex_groups.new(name=g.name)
+    arm_src = next((m.object for m in body.modifiers
+                    if m.type == "ARMATURE" and m.object), None)
+    if arm_src:
+        am = ob.modifiers.new("arm", "ARMATURE")
+        am.object = arm_src
+    # **הפאזז נכנס כאן, לפני Solidify ו-SUBSURF.** הוספתו
+    # אחריהם הפילה את הרנדר ב-OOM (8GB): הגדילים התאינטרפלו
+    # על רשת של כ-110 אלף פאות במקום על 3,400. אותה מלכודת
+    # בדיוק שמתועדת ב-``build`` לגבי שיער הגוף - ונפלתי בה
+    # שוב כי הפעם הרשת הייתה של אובייקט אחר.
+    if fuzz:
+        add_hair(ob, 0.021, col, count=1400,
+                 children=max(3, fuzz), density=None)
+    if thick > 0:
+        sol = ob.modifiers.new("thick", "SOLIDIFY")
+        sol.thickness = thick
+        sol.offset = 1.0
+    sub = ob.modifiers.new("sub", "SUBSURF")
+    sub.levels = 0
+    # רמה 1 ולא 2: הקליפה כבר צפופה (3,400 קודקודים על שטח
+    # של ראש), ורמה שנייה מרבעת אותה בלי הבדל נראה.
+    sub.render_levels = 1 if thick > 0 else 0
+    ob.data.materials.clear()
+    ob.data.materials.append(hair_shell_material(name + "_mat", col))
+    for p in ob.data.polygons:
+        p.use_smooth = True
+    log("  קליפת שיער %s: %d קודקודים, מתיחה %.0f ס\"מ"
+        % (name, len(me.vertices), drop * 100))
+    return ob
+
+
+def comb_hair(body, fdir: float, down: float = 0.86, back: float = 0.42):
+    """מסרק את גדילי האם כלפי מטה ואחורה. **נמדד כבלתי אפשרי ב-``-b``.**
+
+    נשאר בקוד כתיעוד של מה שנבדק ונפסל: ראה ``hair_shell``.
+    ``ps.particles`` ריק ב-background, ולכן הלולאה כאן אינה
+    רצה אף פעם. הפונקציה מדווחת ואינה נופלת.
+
+    ``clump``, ``kink`` ו-``child_length`` כולם מעצבים את הגדיל
+    סביב **הכיוון שבו הוא כבר צומח**, והכיוון הזה הוא הנורמל
+    של הקרקפת - כלומר רדיאלי החוצה מכדור. לכן ארבעה סבבים של
+    כוונון פרמטרים החזירו את אותו אפרו: הם תיקנו את העובי ולא
+    את הכיוון. הכבידה היא מה שחסר, ו-``use_hair_dynamics``
+    דורש סימולציה ובייק - עשרות שניות ושבירות ב-``-b``.
+
+    הפתרון כאן הוא לכתוב ישירות ל-``hair_keys``, שהוא מה
+    שעורך-החלקיקים עושה כשמסרקים ביד. זה **עובד ב-background**
+    כי אלה נתונים ולא פעולת ממשק, והבנים (``INTERPOLATED``)
+    מתאינטרפלים מההורים - ולכן סירוק 3,200 אמהות מסרק גם את
+    51,200 הבנים בלי לגעת באף אחד מהם.
+
+    שתי מלכודות שנפלתי בהן:
+
+    1. ``ps.particles`` ריק עד ש-depsgraph מעריך את המערכת.
+       בלי ``view_layer.update()`` ו-``evaluated_depsgraph_get()``
+       הלולאה פשוט לא רצה, והפונקציה "מצליחה" בלי לעשות דבר.
+    2. כל שינוי ב-``ps.settings`` **אחרי** הסירוק מאפס את
+       המפתחות. לכן הקריאה הזו חייבת להיות אחרונה בשרשרת
+       בניית הדמות, אחרי ה-SUBSURF ואחרי הבגד.
+
+    ``co`` הוא במרחב האובייקט. השורש (מפתח 0) אינו זז לעולם -
+    הזזתו הייתה מנתקת את השיער מהקרקפת.
+    """
+    bpy.context.view_layer.update()
+    try:
+        bpy.context.evaluated_depsgraph_get()
+    except Exception as e:                                   # noqa: BLE001
+        log("    סירוק: אין depsgraph (%s)" % e)
+        return 0
+    moved = 0
+    for ps in body.particle_systems:
+        if ps.settings.type != "HAIR":
+            continue
+        parts = ps.particles
+        if not len(parts):
+            log("    סירוק: אין חלקיקים ב-%s - דילוג" % ps.name)
+            continue
+        for p in parts:
+            ks = p.hair_keys
+            n = len(ks)
+            if n < 2:
+                continue
+            root = ks[0].co.copy()
+            # כיוון הצמיחה המקורי של הגדיל = הנורמל של הקרקפת.
+            d0 = (ks[n - 1].co - root)
+            if d0.length < 1e-6:
+                continue
+            d0.normalize()
+            # היעד: מטה, ומעט אחורה. הרכיב האופקי של הנורמל
+            # נשמר ב-45% כדי שהשיער לא יתקבץ לקווצה אחת -
+            # גדיל מהצד נופל אל הצד, וגדיל מהעורף אל העורף.
+            tgt = mathutils.Vector((d0.x * 0.45, -fdir * back, -1.0))
+            if tgt.length < 1e-6:
+                continue
+            tgt.normalize()
+            for j in range(1, n):
+                t = j / (n - 1.0)
+                v = ks[j].co - root
+                ln = v.length
+                if ln < 1e-7:
+                    continue
+                # ``t**1.6``: השורש כמעט אינו זז (השיער יוצא
+                # מהקרקפת בזווית טבעית) והקצה נופל כמעט לגמרי.
+                # ערך לינארי היה מכופף את הגדיל כבר במילימטר
+                # הראשון ונותן מראה של שיער מודבק לגולגולת.
+                w = down * (t ** 1.6)
+                nd = (v / ln) * (1.0 - w) + tgt * w
+                if nd.length < 1e-7:
+                    continue
+                nd.normalize()
+                ks[j].co = root + nd * ln
+            moved += 1
+    log("  סירוק שיער: %d גדילי אם הוטו מטה (down=%.2f back=%.2f)"
+        % (moved, down, back))
+    return moved
 
 
 # --------------------------------------------------------------- בגדים
@@ -1061,7 +1501,56 @@ def world_hdri(hdri: Path, rot_deg: float = 118.0, strength: float = 1.0):
     nt.links.new(mp.outputs["Vector"], env.inputs["Vector"])
     nt.links.new(env.outputs["Color"], bg.inputs["Color"])
     nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
-    log("HDRI: %s (סיבוב %.0f°)" % (hdri.name, rot_deg))
+
+    # --- **מה שהמצלמה רואה אינו מה שמאיר.**
+    #
+    # ``fish_hoek_beach`` הוא מפרץ: צד אחד ים פתוח, הצד השני
+    # עיירה על מדרון. בפריים המבחן של 14/10 העיירה **היא** כל
+    # הרקע - שורות בתים, דקלים ומכוניות מעל קו המים - ולכן
+    # הים נקרא כפס אפור בין החול לעיירה, ושום תיקון בשיידר
+    # המים לא יכול היה לעזור: הבעיה לא הייתה הצבע אלא מה
+    # שמאחוריו.
+    #
+    # סיבוב ה-HDRI אינו פתרון: הוא תלוי בתוכן של תמונה
+    # מסוימת, ובכל החלפת HDRI צריך לכייל אותו מחדש בעיניים -
+    # כלומר עוד סבב ענן לכל שינוי.
+    #
+    # הפתרון שאינו תלוי בתוכן: ``Is Camera Ray``. קרן מצלמה
+    # רואה שמי Nishita נקיים; **כל** שאר הקרניים (תאורה,
+    # השתקפות, SSS) ממשיכות לראות את ה-HDRI המצולם, ולכן
+    # האור על העור, הצל והגוון החם באופק נשארים בדיוק כפי
+    # שהיו - וזה המקור של ``chroma_std`` שנמדד כאן.
+    # ההשתקפות במים אף משתפרת: היא ממשיכה להיות של סביבה
+    # אמיתית ולא של גרדיאנט.
+    sky = nt.nodes.new("ShaderNodeTexSky")
+    for attr, val in (("sky_type", "NISHITA"),
+                      ("sun_elevation", math.radians(34.0)),
+                      ("sun_rotation", math.radians(132.0)),
+                      ("sun_disc", False),
+                      ("altitude", 2.0),
+                      # אוויר ים: אבק נמוך, אוזון רגיל. ערך אבק
+                      # גבוה מצהיב את האופק וזה נקרא כערפיח
+                      # ולא כחוף.
+                      ("air_density", 1.15),
+                      ("dust_density", 0.85),
+                      ("ozone_density", 1.0)):
+        try:
+            setattr(sky, attr, val)
+        except (AttributeError, TypeError):
+            continue
+    bg2 = nt.nodes.new("ShaderNodeBackground")
+    bg2.inputs["Strength"].default_value = 1.0
+    nt.links.new(sky.outputs["Color"], bg2.inputs["Color"])
+    lp = nt.nodes.new("ShaderNodeLightPath")
+    mx = nt.nodes.new("ShaderNodeMixShader")
+    # Fac=0 -> קלט ראשון. ``Is Camera Ray`` הוא 1 בקרן מצלמה,
+    # ולכן ה-HDRI יושב בקלט הראשון (תאורה) והשמיים בשני (ראייה).
+    nt.links.new(lp.outputs["Is Camera Ray"], mx.inputs["Fac"])
+    nt.links.new(bg.outputs["Background"], mx.inputs[1])
+    nt.links.new(bg2.outputs["Background"], mx.inputs[2])
+    nt.links.new(mx.outputs["Shader"], out.inputs["Surface"])
+    log("HDRI: %s (סיבוב %.0f°) + שמי Nishita לקרן מצלמה"
+        % (hdri.name, rot_deg))
 
 
 def add_sun(elev=38.0, azim=132.0, energy=2.1, angle_deg=0.90):
@@ -1089,7 +1578,7 @@ def plane(name, size, loc, rot=(0, 0, 0)):
     return ob
 
 
-def sand_plane(name="sand", size=120.0, loc=(0.0, -55.0, 0.0), cuts=150):
+def sand_plane(name="sand", size=120.0, loc=(0.0, -55.0, 0.0), cuts=190):
     """מישור החול, **עם גאומטריה ולא רק עם שיידר**.
 
     עד כאן החול היה ``primitive_plane_add`` - ארבעה קודקודים.
@@ -1132,12 +1621,25 @@ def sand_plane(name="sand", size=120.0, loc=(0.0, -55.0, 0.0), cuts=150):
     tex2 = bpy.data.textures.new("sand_ripples", type="WOOD")
     tex2.noise_basis_2 = "SIN"
     tex2.wood_type = "BANDNOISE"
-    tex2.noise_scale = 0.60
-    tex2.turbulence = 2.4
+    # **1.55 מטר ולא 60 ס"מ.** האדוות הן הדבר היחיד שמפריד
+    # חול מרצפה, והן היו מתחת לסף הפתרון: 60 ס"מ במרחק 12
+    # מטר בעדשת 85mm על 960 פיקסלים הם כ-5 פיקסלים לתקופה
+    # שלמה, וה-denoiser (שמטרתו למחוק תדר גבוה) מחק אותן.
+    # זה מדויק גם לגבי השיידר - שתי השכבות הוגדלו יחד.
+    # 0.62 מטר ולא 1.55. ב-1.55 האדווה רחבה מדי כדי להטיל פס
+    # צל בשמש של 38°: המדרון שלה מתון, והתוצאה בפריים היא
+    # גרדיאנט רך שנקרא כמשטח חלק. 62 ס"מ עם אותו עומק (5.8
+    # ס"מ) הוא מדרון תלול פי 2.5, וזה מה שמייצר את פס האור/צל
+    # לסירוגין שהעין קוראת כחול.
+    tex2.noise_scale = 0.62
+    tex2.turbulence = 1.8
     d2 = ob.modifiers.new("ripples", "DISPLACE")
     d2.texture = tex2
     d2.texture_coords = "GLOBAL"
-    d2.strength = 0.022
+    # 5.8 ס"מ ולא 2.2: עומק אדווה אמיתית בחוף. זה מה שמטיל
+    # פס צל מול שמש ב-38 מעלות, וצל הוא מה שהעין קוראת
+    # כמרקם. Bump לעולם לא ייתן אותו.
+    d2.strength = 0.058
     d2.mid_level = 0.0
     for p in ob.data.polygons:
         p.use_smooth = True
@@ -1234,38 +1736,73 @@ def sand_material():
     dune = noise(0.72, 5.0, 320, rough=0.48)
     dune_r = ramp(dune.outputs["Fac"], 320,
                   0.26, (0.398, 0.280, 0.140),
-                  0.76, (0.872, 0.742, 0.498))
+                  0.76, (0.790, 0.678, 0.472))
 
     # --- 2. אדוות רוח: **השכבה שמכריעה**. תקופה ~35 ס"מ.
     #     Noise מתוח בציר אחד דרך Mapping נותן פסים מכווננים
     #     ולא כתמים - כך נראות אדוות שנוצרו מרוח בכיוון אחד.
     rip_map = nt.nodes.new("ShaderNodeMapping")
     rip_map.location = (-1400, 60)
-    rip_map.inputs["Scale"].default_value = (1.0, 0.22, 1.0)
+    # **הכיוון היה הפוך.** ``Scale=(1.0,0.22,1.0)`` דוחס את ציר
+    # Y, כלומר מותח את המרקם **לאורך** Y - פסים שרצים מהמצלמה
+    # אל הים. אדוות חול נוצרות מגל ומרוח שמגיעים מהים, ולכן הן
+    # רצות **במקביל לקו המים**, כלומר לאורך X. הדחיסה עוברת
+    # ל-X, והסיבוב של 17° משאיר אותן אלכסוניות מעט כמו בחוף
+    # אמיתי ולא כמו שרטוט.
+    rip_map.inputs["Scale"].default_value = (0.22, 1.0, 1.0)
     rip_map.inputs["Rotation"].default_value = (0.0, 0.0, math.radians(17.0))
     nt.links.new(src, rip_map.inputs["Vector"])
     rip = nt.nodes.new("ShaderNodeTexNoise")
     rip.location = (-1250, 60)
-    rip.inputs["Scale"].default_value = 2.85
-    rip.inputs["Detail"].default_value = 7.0
+    # 1.05 במקום 2.85: תקופה של כמטר במקום 35 ס"מ. ראה
+    # ``sand_plane`` - אותו שיקול בדיוק, וחייבים שהשניים
+    # יהיו באותו קנה מידה אחרת הצבע והצורה נלחמים.
+    # 1.6 ולא 1.05: תקופה של 63 ס"מ במקום 95. במרחק 10 מטר
+    # פיקסל הוא ~12 ס"מ, כלומר 63 ס"מ הם כחמישה פיקסלים -
+    # מעל סף הפתרון ומתחת לסף שבו האדווה נראית כגבעה. הערך
+    # חייב להתאים ל-``sand_plane`` (שם 0.62 מטר), אחרת הצבע
+    # והצורה מתארים שתי אדוות שונות ומבטלים זה את זה.
+    rip.inputs["Scale"].default_value = 1.6
+    rip.inputs["Detail"].default_value = 8.0
     rip.inputs["Roughness"].default_value = 0.42
     nt.links.new(rip_map.outputs["Vector"], rip.inputs["Vector"])
+    # טווח צר יותר = ניגודיות גבוהה יותר בין שיא האדווה
+    # לשקע שלה. 0.38-0.62 נתן מעבר רך שהתמזג לממוצע אחד.
     rip_r = ramp(rip.outputs["Fac"], 60,
-                 0.38, (0.306, 0.212, 0.106),
-                 0.62, (0.922, 0.822, 0.602))
+                 0.40, (0.330, 0.238, 0.126),
+                 0.60, (0.898, 0.800, 0.592))
     base = mix(160, None, dune_r.outputs["Color"], None,
-               blend="OVERLAY", fac=0.52)
+               blend="OVERLAY", fac=0.56)
     nt.links.new(rip_r.outputs["Color"], base.inputs["Color2"])
 
     # --- 3. גרגר דק. מועיל רק בחזית הקאדר, ולכן משקלו נמוך -
     #     אבל הוא מה שמונע "פלסטיק" במטר הראשון.
-    grain = noise(26.0, 10.0, -180, rough=0.70)
+    # 26 בקואורדינטות מטר = תקופה של 3.8 ס"מ, כלומר הרבה
+    # מתחת לפיקסל בכל מקום בפריים חוץ מהמטר הראשון. 9.5
+    # הוא 10.5 ס"מ - גרגר גס שעוד נקרא.
+    grain = noise(9.5, 10.0, -180, rough=0.70)
     grain_r = ramp(grain.outputs["Fac"], -180,
-                   0.40, (0.62, 0.52, 0.36),
-                   0.60, (1.00, 0.96, 0.86))
+                   0.40, (0.66, 0.57, 0.42),
+                   0.60, (0.94, 0.89, 0.79))
     g_mix = mix(-120, None, base.outputs["Color"], None,
-                blend="SOFT_LIGHT", fac=0.34)
+                blend="SOFT_LIGHT", fac=0.40)
     nt.links.new(grain_r.outputs["Color"], g_mix.inputs["Color2"])
+
+    # --- 3ב. **שבירת טון במאקרו, ~14 מטר.** כל ארבע השכבות עד
+    #     כאן הן מטר ומטה, ולכן ברוחב הקאדר (כ-7 מטר בחזית,
+    #     עשרות באחורה) הן ממוצעות לטון אחד - וזה מה שנראה
+    #     בפריים: שטיח כתום אחיד. חוף אמיתי משנה גוון בקנה
+    #     מידה של עשרות מטרים (לחות שנותרה, חול שהרוח הביאה,
+    #     צל של דיונה). תקופה של 14 מטר היא מאות פיקסלים -
+    #     היא לעולם אינה נמחקת בדגימה.
+    macro = noise(0.072, 3.0, -1020, rough=0.42)
+    macro_r = ramp(macro.outputs["Fac"], -1020,
+                   0.30, (0.565, 0.470, 0.330),
+                   0.72, (0.960, 0.905, 0.760))
+    m_mix = mix(-960, None, g_mix.outputs["Color"], None,
+                blend="OVERLAY", fac=0.34)
+    nt.links.new(macro_r.outputs["Color"], m_mix.inputs["Color2"])
+    g_mix = m_mix
 
     # --- 4. לחות - **לפי המרחק מקו המים, לא לפי רעש**.
     #
@@ -1296,8 +1833,12 @@ def sand_material():
     nt.links.new(jit.outputs["Value"], add.inputs[1])
     wet_r = nt.nodes.new("ShaderNodeMapRange")
     wet_r.location = (-620, -480)
-    wet_r.inputs["From Min"].default_value = 44.0   # יבש מכאן ואחורה
-    wet_r.inputs["From Max"].default_value = 57.0   # רטוב בקצה
+    # 36..58 ולא 44..57. ברצועה של 13 מטר על חוף של 120 הרטיבות
+    # נפלה כמעט כולה מחוץ לקאדר, ולכן בפריים החול היה יבש
+    # ואחיד עד לקו הקצף - והמעבר חול/ים נקרא כקו חיתוך ולא
+    # כחוף. 22 מטר של התכהות הדרגתית הם מה שמחבר ביניהם.
+    wet_r.inputs["From Min"].default_value = 36.0   # יבש מכאן ואחורה
+    wet_r.inputs["From Max"].default_value = 58.0   # רטוב בקצה
     wet_r.inputs["To Min"].default_value = 0.0
     wet_r.inputs["To Max"].default_value = 1.0
     wet_r.clamp = True
@@ -1312,7 +1853,9 @@ def sand_material():
     # --- 5. הזרקת רוויה, נגד AgX.
     hs = nt.nodes.new("ShaderNodeHueSaturation")
     hs.location = (-380, -60)
-    hs.inputs["Saturation"].default_value = 1.34
+    # 1.10 ולא 1.34: ב-1.34 החול יצא כתום זוהר וכתמי, לא
+    # חוף. AgX אכן מוריד רוויה, אבל פחות ממה שהערכתי.
+    hs.inputs["Saturation"].default_value = 1.10
     hs.inputs["Value"].default_value = 1.00
     nt.links.new(w_mix.outputs["Color"], hs.inputs["Color"])
     nt.links.new(hs.outputs["Color"], b.inputs["Base Color"])
@@ -1339,7 +1882,7 @@ def sand_material():
     #     (``sand_plane``), ולכן Bump כאן אינו מנסה לייצר דיונות -
     #     הוא רק מחספס את פני התא. Bump שמנסה להחליף גאומטריה
     #     נראה כמו הטבעה על פלסטיק, וזה מה שהיה כאן קודם.
-    bump_n = noise(34.0, 12.0, -700, rough=0.66)
+    bump_n = noise(13.0, 12.0, -700, rough=0.66)
     bp = nt.nodes.new("ShaderNodeBump")
     bp.location = (-380, -700)
     bp.inputs["Strength"].default_value = 0.65
@@ -1349,7 +1892,7 @@ def sand_material():
     # ה-Bump מוסיף לה קצה.
     bp2 = nt.nodes.new("ShaderNodeBump")
     bp2.location = (-180, -700)
-    bp2.inputs["Strength"].default_value = 0.42
+    bp2.inputs["Strength"].default_value = 0.72
     bp2.inputs["Distance"].default_value = 0.028
     nt.links.new(rip.outputs["Fac"], bp2.inputs["Height"])
     nt.links.new(bp.outputs["Normal"], bp2.inputs["Normal"])
@@ -1359,15 +1902,75 @@ def sand_material():
 
 
 def water_material():
+    """ים, לא משטח. **הצבע נגזר מהעומק ולא מקבוע אחד.**
+
+    הצבע הקודם היה ``(0.040,0.160,0.205)`` אחיד על מישור של 500
+    מטר. ים אמיתי אינו בצבע אחד: הרדוד שליד קו המים הוא טורקיז
+    בהיר (האור חוזר מקרקעית החול דרך חצי מטר מים), ומשם ועד
+    האופק הוא מתכהה אל כחול-דיו כי האור כבר לא חוזר. אחידות
+    היא בדיוק מה שהופך ים לפס.
+
+    ``Object`` ב-Y הוא המרחק מקו המים במטרים (המישור הוא ±250
+    סביב מרכזו ב-y=140, כלומר ‎-126 בקו המים ו-‎+250 באופק).
+    """
     mat = bpy.data.materials.new("water")
     nt, out = _nodes(mat)
     b = nt.nodes.new("ShaderNodeBsdfPrincipled")
     b.location = (300, 0)
-    b.inputs["Base Color"].default_value = (0.040, 0.160, 0.205, 1)
-    # 0.055 החזיר מראה שהשתקף כלבן שרוף בפריים המבחן. 0.13 עדיין
-    # קורא כמים אבל מפזר את ההיילייט במקום להצמיד אותו.
-    b.inputs["Roughness"].default_value = 0.13
-    for k, v in (("Transmission Weight", 0.22), ("Transmission", 0.22)):
+    dtc = nt.nodes.new("ShaderNodeTexCoord")
+    dtc.location = (-1400, 240)
+    dsep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    dsep.location = (-1200, 240)
+    nt.links.new(dtc.outputs["Object"], dsep.inputs["Vector"])
+    # הפרעת רעש על גבול העומק: בלעדיה המעבר רדוד->עמוק הוא קו
+    # ישר לרוחב הפריים, וקו ישר בים נקרא כתפר ולא כשרטון.
+    dn = nt.nodes.new("ShaderNodeTexNoise")
+    dn.location = (-1200, 60)
+    dn.inputs["Scale"].default_value = 0.055
+    dn.inputs["Detail"].default_value = 4.0
+    nt.links.new(dtc.outputs["Object"], dn.inputs["Vector"])
+    djit = nt.nodes.new("ShaderNodeMath")
+    djit.location = (-1000, 60)
+    djit.operation = "MULTIPLY_ADD"
+    djit.inputs[1].default_value = 34.0
+    djit.inputs[2].default_value = -17.0
+    nt.links.new(dn.outputs["Fac"], djit.inputs[0])
+    dadd = nt.nodes.new("ShaderNodeMath")
+    dadd.location = (-830, 180)
+    dadd.operation = "ADD"
+    nt.links.new(dsep.outputs["Y"], dadd.inputs[0])
+    nt.links.new(djit.outputs["Value"], dadd.inputs[1])
+    dep = nt.nodes.new("ShaderNodeMapRange")
+    dep.location = (-640, 180)
+    dep.inputs["From Min"].default_value = -126.0   # קו המים
+    dep.inputs["From Max"].default_value = -34.0    # ~90 מטר לים
+    dep.clamp = True
+    nt.links.new(dadd.outputs["Value"], dep.inputs["Value"])
+    dramp = nt.nodes.new("ShaderNodeValToRGB")
+    dramp.location = (-440, 180)
+    el = dramp.color_ramp.elements
+    el[0].position = 0.0
+    # טורקיז רדוד. הערכים גבוהים בכוונה: AgX עם חשיפה ‎-0.52
+    # מוריד רוויה, ומי שמתחיל מטורקיז "מדויק" מסיים באפור -
+    # בדיוק מה שקרה לחול בארבעה סבבים.
+    el[0].color = (0.055, 0.520, 0.470, 1.0)
+    el[1].position = 0.62
+    el[1].color = (0.010, 0.072, 0.168, 1.0)
+    e2 = dramp.color_ramp.elements.new(0.24)
+    e2.color = (0.020, 0.265, 0.340, 1.0)
+    nt.links.new(dep.outputs["Result"], dramp.inputs["Fac"])
+    nt.links.new(dramp.outputs["Color"], b.inputs["Base Color"])
+    # 0.13 פיזר את ההיילייט על כל המשטח, וים ללא נצנוץ ממוקד
+    # נקרא כפלסטיק. 0.045 מחזיר את שביל השמש; האדוות הדקות
+    # (``n2``) הן שפורסות אותו לנקודות ולא לכתם אחד.
+    b.inputs["Roughness"].default_value = 0.045
+    for k in ("IOR",):
+        if k in b.inputs:
+            b.inputs[k].default_value = 1.333
+    # שקיפות נמוכה ובכוונה: מתחת למישור אין קרקעית, ולכן
+    # ``Transmission`` גבוה מחזיר שחור ולא עומק. העומק כאן
+    # נעשה בצבע, שם הוא נמדד.
+    for k, v in (("Transmission Weight", 0.08), ("Transmission", 0.08)):
         if k in b.inputs:
             b.inputs[k].default_value = v
             break
@@ -1393,17 +1996,32 @@ def water_material():
     n2.inputs["Scale"].default_value = 5.5
     n2.inputs["Detail"].default_value = 10.0
     nt.links.new(tc.outputs["Object"], n2.inputs["Vector"])
+    # שכבה שלישית, ~70 ס"מ. בלעדיה היה פער בין גל של 2.4 מטר
+    # לאדווה של 18 ס"מ, וים אמיתי מלא דווקא בתדר שביניהם -
+    # הוא זה שפורס את שביל השמש לנקודות במרחק בינוני.
+    n3 = nt.nodes.new("ShaderNodeTexNoise")
+    n3.location = (-760, -700)
+    n3.noise_dimensions = "4D"
+    n3.inputs["Scale"].default_value = 1.45
+    n3.inputs["Detail"].default_value = 9.0
+    nt.links.new(tc.outputs["Object"], n3.inputs["Vector"])
     bp = nt.nodes.new("ShaderNodeBump")
     bp.location = (-420, -260)
-    bp.inputs["Strength"].default_value = 0.85
-    bp.inputs["Distance"].default_value = 0.090
+    bp.inputs["Strength"].default_value = 0.95
+    bp.inputs["Distance"].default_value = 0.130
     nt.links.new(n.outputs["Fac"], bp.inputs["Height"])
+    bp3 = nt.nodes.new("ShaderNodeBump")
+    bp3.location = (-300, -700)
+    bp3.inputs["Strength"].default_value = 0.80
+    bp3.inputs["Distance"].default_value = 0.034
+    nt.links.new(n3.outputs["Fac"], bp3.inputs["Height"])
+    nt.links.new(bp.outputs["Normal"], bp3.inputs["Normal"])
     bp2 = nt.nodes.new("ShaderNodeBump")
     bp2.location = (-180, -300)
-    bp2.inputs["Strength"].default_value = 0.55
-    bp2.inputs["Distance"].default_value = 0.010
+    bp2.inputs["Strength"].default_value = 0.70
+    bp2.inputs["Distance"].default_value = 0.012
     nt.links.new(n2.outputs["Fac"], bp2.inputs["Height"])
-    nt.links.new(bp.outputs["Normal"], bp2.inputs["Normal"])
+    nt.links.new(bp3.outputs["Normal"], bp2.inputs["Normal"])
     nt.links.new(bp2.outputs["Normal"], b.inputs["Normal"])
     nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat, n
@@ -1416,15 +2034,28 @@ def foam_material():
     b.location = (300, 0)
     b.inputs["Base Color"].default_value = (0.93, 0.95, 0.95, 1)
     b.inputs["Roughness"].default_value = 0.52
+    # **קצף מתוח בציר הגל, לא כתמים.** רעש איזוטרופי נותן
+    # ספוג; קצף של גל שנשבר הוא רצועות מתוחות **במקביל לקו
+    # המים**, ולכן ה-Mapping דוחס את ציר Y פי 4.5. זה ההבדל
+    # בין "לבן מלוכלך" לבין קו גלישה.
+    fmap = nt.nodes.new("ShaderNodeMapping")
+    fmap.location = (-900, 200)
+    fmap.inputs["Scale"].default_value = (0.55, 4.5, 1.0)
+    ftc = nt.nodes.new("ShaderNodeTexCoord")
+    ftc.location = (-1100, 200)
+    nt.links.new(ftc.outputs["Object"], fmap.inputs["Vector"])
     n = nt.nodes.new("ShaderNodeTexNoise")
     n.location = (-700, 200)
     n.noise_dimensions = "4D"
-    n.inputs["Scale"].default_value = 14.0
-    n.inputs["Detail"].default_value = 9.0
+    n.inputs["Scale"].default_value = 3.6
+    n.inputs["Detail"].default_value = 11.0
+    nt.links.new(fmap.outputs["Vector"], n.inputs["Vector"])
     r = nt.nodes.new("ShaderNodeValToRGB")
     r.location = (-430, 200)
-    r.color_ramp.elements[0].position = 0.48
-    r.color_ramp.elements[1].position = 0.63
+    # 0.44/0.58 ולא 0.48/0.63: סף נמוך יותר פותח יותר שטח קצף,
+    # והמעבר הצר שומר על קצה חד. קצף עם קצה רך נראה כערפל.
+    r.color_ramp.elements[0].position = 0.44
+    r.color_ramp.elements[1].position = 0.58
     nt.links.new(n.outputs["Fac"], r.inputs["Fac"])
     # --- **הקצף הוא רצועה, לא שטיח.** בפריים המבחן מישור הקצף
     # (34 יחידות) כיסה את כל חזית הפריים בלבן, והחול נעלם
@@ -1442,12 +2073,15 @@ def foam_material():
     # למרכז המישור (``primitive_plane_add(size=30)`` נותן ‎±15).
     # ``Generated`` היה נותן 0..1 ומחייב כיול מחדש בכל שינוי
     # גודל; Object נשאר נכון.
-    near.inputs["From Min"].default_value = -1.10
-    near.inputs["From Max"].default_value = -0.35
+    # הורחב מ-3 מטר ל-6: בפריים של 14/10 הרצועה הייתה דקה מכדי
+    # להיקרא כגלישה, ושתי הרצועות (חול רטוב מלפנים, ים מאחור)
+    # נגעו זו בזו. גל שנשבר משאיר 5-7 מטר של קצף.
+    near.inputs["From Min"].default_value = -2.40
+    near.inputs["From Max"].default_value = -0.90
     far = nt.nodes.new("ShaderNodeMapRange")
     far.location = (-560, -330)
-    far.inputs["From Min"].default_value = 1.90
-    far.inputs["From Max"].default_value = 0.90
+    far.inputs["From Min"].default_value = 3.60
+    far.inputs["From Max"].default_value = 1.60
     nt.links.new(sep.outputs["Y"], near.inputs["Value"])
     nt.links.new(sep.outputs["Y"], far.inputs["Value"])
     band = nt.nodes.new("ShaderNodeMath")
@@ -1576,7 +2210,7 @@ def build(a):
     # מרככת פירוט בתדר גבוה - כלומר בדיוק את השיער - וזה מה
     # שנמדד ב-``sharp_detail``.
     _set(sc.cycles, device="CPU", samples=a.samples,
-         use_adaptive_sampling=True, adaptive_threshold=0.010,
+         use_adaptive_sampling=True, adaptive_threshold=0.006,
          use_denoising=True, denoiser="OPENIMAGEDENOISE",
          denoising_prefilter="ACCURATE", max_bounces=6,
          transmission_bounces=3, caustics_reflective=False,
@@ -1595,7 +2229,7 @@ def build(a):
     # ‎-0.20 החזיר חול ומים שרופים ללבן. ‎-0.62 מחזיר את קו
     # האופק ואת מרקם החול לתוך הטווח, והעור נשאר קריא כי
     # ה-AgX מגלגל את ההיילייטס ולא מצמיד אותם.
-    sc.view_settings.exposure = -0.62
+    sc.view_settings.exposure = -0.52
     sc.render.resolution_x = a.width
     sc.render.resolution_y = a.height
     sc.render.resolution_percentage = 100
@@ -1621,8 +2255,11 @@ def build(a):
     water.data.materials.append(wmat)
     fmat, foam = foam_material()
     # קצף של 30 מטר אינו קצף אלא מישור. גל שנשבר מותיר רצועה
-    # של 3-5 מטר, ולכן 9 - וממוקם בדיוק בקצה החול (y=22).
-    wet = plane("foam", 9.0, (0.0, 14.5, 0.028))
+    # של 5-7 מטר, ולכן 16 (המישור רחב, הרצועה שעליו צרה - ראה
+    # ``foam_material``: הגבול הוא בשיידר ולא בגאומטריה, ולכן
+    # מישור רחב אינו עולה שום דבר בזיכרון ומבטיח שהרצועה חוצה
+    # את כל רוחב הפריים).
+    wet = plane("foam", 16.0, (0.0, 14.2, 0.030))
     wet.data.materials.append(fmat)
 
     bundle = Path(a.bundle)
@@ -1649,8 +2286,8 @@ def build(a):
         # בהיר. ``Radial Roughness`` עושה את השאר.
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
-         "tone": (0.932, 0.782, 0.676), "flush": (0.80, 0.37, 0.33),
-         "hair": (0.760, 0.545, 0.242), "hair_len": 0.056,
+         "tone": (0.952, 0.788, 0.672), "flush": (0.90, 0.46, 0.39),
+         "hair": (0.830, 0.640, 0.318), "hair_len": 0.105,
          "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000,
          "swim": {"top_z": 0.737, "top_w": 0.049, "top_wave": 0.017,
                   "hip_z": 0.548, "leg_z": 0.452, "hip_wave": 0.020}},
@@ -1662,8 +2299,8 @@ def build(a):
         # ניכר בפריים בלי ששתיהן ייראו זהות.
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
          "turn": math.radians(8.0), "garment": "swim",
-         "tone": (0.902, 0.748, 0.652), "flush": (0.74, 0.32, 0.30),
-         "hair": (0.845, 0.700, 0.418), "hair_len": 0.071,
+         "tone": (0.940, 0.766, 0.652), "flush": (0.88, 0.43, 0.37),
+         "hair": (0.885, 0.780, 0.530), "hair_len": 0.118,
          "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962,
          "swim": {"top_z": 0.744, "top_w": 0.055, "top_wave": 0.013,
                   "hip_z": 0.561, "leg_z": 0.466, "hip_wave": 0.026}},
@@ -1708,8 +2345,32 @@ def build(a):
         # בשרשרת. ARMATURE -> PARTICLE -> SUBSURF נותן אותו שיער
         # בדיוק (הדפורמציה של הריג כבר הוחלה לפניו), ומוציא את
         # הרשת המחולקת מהנתיב הזה לגמרי.
-        add_hair(body, s["hair_len"], s["hair"],
-                 children=a.hair_children)
+        # **שיער = קליפה + פאזז, ולא גדילים ארוכים.** ראה
+        # ``hair_shell``: גדילי חלקיקים צומחים רדיאלית ואי אפשר
+        # לסרק אותם ב-background, ולכן הצורה נבנית בגאומטריה
+        # והחלקיקים נשארים רק בתפקיד שהם כן ממלאים היטב -
+        # קצה רך. 2.2 ס"מ במקום 20, ולכן גם אין עוד OOM.
+        # **הקליפה מבוטלת כברירת מחדל - נמדדה ונפסלה.**
+        # הרעיון נכון (ראה ``hair_shell``) והמימוש אינו: בכל
+        # הרצה היא רונדרה כמסה שמכסה את הפנים מהמצח לסנטר,
+        # **גם** כש-``drop=0``, **גם** בלי Solidify ו-SUBSURF
+        # ו**גם** בלי פאזז החלקיקים - שלושה מבחני בידוד שכל
+        # אחד מהם שלל חשוד אחר. במקביל ``build_groups`` מדדה
+        # שאף קודקוד פנים אינו נכלל ב-``keep``. כלומר הפער
+        # הוא בין בחירת הקודקודים לבין מה שמרונדר, ולא נסגר
+        # בזמן שהוקצב. השיער חוזר לחלקיקים - עם ``hairlen``
+        # ועם הקרקפת המורחבת אחורה, שתיהן נמדדו כעובדות -
+        # ושם הפנים גלויות.
+        shell = None
+        if a.hair_shell:
+            shell = hair_shell(body, h, fdir, s["hair"],
+                               drop=s.get("hair_drop", 0.19),
+                               thick=a.hair_thick, fuzz=a.hair_fuzz)
+        if shell:
+            shell.name = "hair_" + s["tag"]
+        else:
+            add_hair(body, s["hair_len"], s["hair"],
+                     children=a.hair_children)
         sub = body.modifiers.new("sub", "SUBSURF")
         sub.levels = 0
         sub.render_levels = a.subdiv
@@ -1748,24 +2409,32 @@ def build(a):
                 g.add(list(range(len(e.data.vertices))), 1.0, "REPLACE")
                 em = e.modifiers.new("arm", "ARMATURE")
                 em.object = arm
-        if garment:
-            garment.parent = root
-            garment.matrix_parent_inverse = root.matrix_world.inverted()
+        for extra in (garment, shell):
+            if not extra:
+                continue
+            extra.parent = root
+            extra.matrix_parent_inverse = root.matrix_world.inverted()
         root.location = (s["x"], s["y"], 0.0)
         root.rotation_euler = (0.0, 0.0, s["yaw"])
         root.scale = (s["scale"],) * 3
         ok = sanity_pose(body, arm, h)
         cast.append({"root": root, "arm": arm, "body": body,
+                     "fdir": fdir,
                      "x": s["x"], "y": s["y"], "yaw": s["yaw"],
                      "turn": s["turn"]})
         meta.append({"tag": s["tag"], "verts": len(body.data.vertices),
                      "rigged": bool(arm), "pose_sane": ok,
+                     "hair_shell": bool(shell),
+                     "hair_verts": len(shell.data.vertices) if shell else 0,
                      "garment": bool(garment),
                      "garment_kind": s["garment"], "scale": s["scale"]})
         log("דמות %s: %d קודקודים, ריג=%s, בגד=%s"
             % (s["tag"], len(body.data.vertices), bool(arm), bool(garment)))
 
     bpy.context.view_layer.update()
+    # **אחרון בשרשרת, ובכוונה.** ראה ``comb_hair``: כל נגיעה
+    # ב-``ps.settings`` אחרי הסירוק מאפסת את המפתחות, ולכן זה
+    # קורה רק כששתי הדמויות כבר בנויות במלואן.
     cam, dist, ctr = fit_camera([c["body"] for c in cast],
                                 w=a.width, h=a.height)
     cam0 = tuple(cam.location)
@@ -1786,6 +2455,18 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=540)
     ap.add_argument("--subdiv", type=int, default=2,
                     help="רמות חלוקה ברינדור. 2=חלק, 1=חצי זיכרון")
+    ap.add_argument("--hair-shell", type=int, default=0, dest="hair_shell",
+                    help="1=תסרוקת כגאומטריה (נפסלה), 0=חלקיקים")
+    ap.add_argument("--hair-fuzz", type=int, default=6, dest="hair_fuzz",
+                    help="בני פאזז על קליפת השיער. 0=בלי")
+    ap.add_argument("--hair-thick", type=float, default=0.016,
+                    dest="hair_thick", help="עובי קליפת השיער")
+    ap.add_argument("--hair-comb", type=float, default=0.86,
+                    dest="hair_comb",
+                    help="עוצמת הסירוק כלפי מטה. 0=אפרו, 1=שטוח")
+    ap.add_argument("--hair-back", type=float, default=0.42,
+                    dest="hair_back",
+                    help="כמה השיער נסוג אחורה מהפנים")
     ap.add_argument("--hair-children", type=int, default=16,
                     dest="hair_children",
                     help="בנים לכל אם. סך הגדילים = 4200 × זה")
