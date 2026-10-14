@@ -62,6 +62,11 @@ import bpy                                                   # noqa: E402
 import mathutils                                             # noqa: E402
 
 BODY = "GEO-body_female_realistic"
+
+# מה באמת נטען כמפות עור. נרשם ל-``studio_meta.json`` כדי
+# שהשער ידע אם נמדד רנדר עם אלבדו מצולם או בלעדיו - אחרת אין
+# דרך לדעת בדיעבד אם המפות הגיעו לרנר בכלל.
+SKIN_INFO: dict = {}
 EYES = (BODY + ".eye.L", BODY + ".eye.R")
 TARGET_H = 1.70                                              # מטר
 
@@ -189,7 +194,7 @@ def smoothstep(a: float, b: float, x: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
-def build_groups(body, h: float, fdir: float):
+def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
     """קרקפת, חזה, אזורי בגד וזרועות - הכול מניתוח גאומטרי.
 
     אין כאן קבוצות מוכנות מהנכס (חבילת פיסול אינה מכילה כאלה),
@@ -199,6 +204,13 @@ def build_groups(body, h: float, fdir: float):
     xs = [abs(v.x) for v in vs]
     xmax = max(xs) or 1.0
     scalp, chest, swim, crop = {}, {}, {}, {}
+    sw = swimcut or {}
+    cut_tz = float(sw.get("top_z", 0.737))     # מרכז העליון (יחס גובה)
+    cut_tw = float(sw.get("top_w", 0.049))     # חצי-רוחב העליון
+    cut_wave = float(sw.get("top_wave", 0.017))  # עומק העקומה בעליון
+    cut_hz = float(sw.get("hip_z", 0.548))     # קו המותן
+    cut_lz = float(sw.get("leg_z", 0.452))     # קו הרגל
+    cut_hw = float(sw.get("hip_wave", 0.020))  # עומק העקומה בתחתון
     for i, v in enumerate(vs):
         zr = v.z / h
         # --- קרקפת: הכובע העליון של הראש, דועך כלפי מטה כדי
@@ -224,18 +236,41 @@ def build_groups(body, h: float, fdir: float):
         # ``straight_edge_ratio`` 3.20% מול 1.87% ברפרנס. הפרעה
         # דטרמיניסטית לפי x ו-y (ולא אקראית - אחרת הבגד היה
         # מרצד בין פריימים) שוברת את הקו בלי לשבור את הצורה.
-        jit = (0.0085 * math.sin(v.x * 41.0) * math.cos(v.y * 31.0)
-               + 0.0045 * math.sin(v.y * 73.0 + v.x * 17.0))
+        # **נמדד ונדחה.** ההפרעה הזאת הרעה ולא שיפרה:
+        # ``straight_edge_ratio`` עלה 3.20% -> 3.70% ו-
+        # ``facet_ratio`` 0.226% -> 0.286%. הסיבה היא שעל רשת
+        # quads הפרעה בגובה הגבול לא "מעגלת" את הקו אלא הופכת
+        # אותו לשן-מסור של מקטעים ישרים קצרים - כלומר בדיוק
+        # מה שהמדד סופר. גבול חלק עדיף; הפתרון הנכון הוא חיתוך
+        # לפי UV או לפי עקומה, לא רעש על הקואורדינטה.
+        JITTER = 0.0
+        jit = JITTER * (math.sin(v.x * 41.0) * math.cos(v.y * 31.0))
         zj = zr + jit
-        # --- בגד ים (דמות א'): חזה + אגן, בטן חשופה.
-        if torso and (0.655 < zj < 0.800 or 0.455 < zj < 0.545):
-            swim[i] = 1.0
-        # --- חולצת בטן (דמות ב'): מהכתף עד מעט מתחת לחזה.
+        # --- חולצת בטן. **נשארת בקוד ואינה בשימוש** - שתי
+        #     הדמויות לבושות בבגד ים. היא מושארת כי החיתוך לפי
+        #     גובה קשיח הוא הדוגמה הנגדית: קצה אופקי סביב כל
+        #     הגו, והוא זה שנמדד כמשונן.
         if torso and 0.640 < zj < 0.855:
             crop[i] = 1.0
-        # --- תחתון לדמות ב'
         if torso and 0.450 < zj < 0.545:
             crop[i] = 1.0
+        # --- בגד ים דו-חלקי, **גבול עקומה ולא גבול גובה**.
+        #     ``th`` היא הזווית סביב ציר הגוף: 0 מלפנים,
+        #     ±pi/2 בצדדים, pi מאחור. כל קצה הוא ``z(th)``
+        #     חלקה ורציפה (cos בלבד, ולכן אינה נסגרת בקפיצה),
+        #     ובכך אין בבגד אף קו אופקי.
+        th = math.atan2(v.y * fdir, v.x if abs(v.x) > 1e-6 else 1e-6)
+        c1, c2 = math.cos(th), math.cos(2.0 * th)
+        # עליון בנדו: רחב בצדדים (רצועה), צר במרכז הקדמי.
+        hw = cut_tw + cut_wave * (-c2)
+        if torso and abs(zj - cut_tz) < hw:
+            swim[i] = 1.0
+        # תחתון: קו המותן יורד מלפנים ועולה במותניים, וקו
+        # הרגל גבוה בצדדים - שתי עקומות, שתיהן חלקות.
+        z_hi = cut_hz - cut_hw * 0.55 * c1
+        z_lo = cut_lz + cut_hw * c2 * 0.5
+        if torso and z_lo < zj < z_hi:
+            swim[i] = 1.0
     vgroup(body, "scalp", scalp)
     vgroup(body, "chest", chest)
     return {"scalp": scalp, "chest": chest, "swim": swim, "crop": crop,
@@ -278,9 +313,48 @@ BONES = [
     # שם            התחלה (יחס גובה)      סוף                 הורה
     ("pelvis",      (0.00, 0.000, 0.530), (0.00, 0.0, 0.600), None),
     ("spine",       (0.00, 0.000, 0.600), (0.00, 0.0, 0.730), "pelvis"),
-    ("chest_b",     (0.00, 0.000, 0.730), (0.00, 0.0, 0.830), "spine"),
-    ("neck",        (0.00, 0.000, 0.830), (0.00, 0.0, 0.880), "chest_b"),
-    ("head_b",      (0.00, 0.000, 0.880), (0.00, 0.0, 0.990), "neck"),
+    ("chest",       (0.00, 0.000, 0.730), (0.00, 0.0, 0.862), "spine"),
+    ("neck",        (0.00, 0.000, 0.862), (0.00, 0.0, 0.900), "chest"),
+    ("head",        (0.00, 0.000, 0.900), (0.00, 0.0, 0.995), "neck"),
+]
+
+# --- עצמות מדידה. **אינן מעוותות כלום**, ולכן אינן מסכנות דבר.
+#
+# שער הפרופורציות קורא שלד מתוך ה-glTF ודורש שרשרת אנתרופומטרית
+# מלאה. בשלד הקודם היו חמש עצמות ציר בלבד, ולכן השער החזיר "אין
+# שלד קריא" - כלומר **לא נמדד**, וזה נחשב כישלון בצדק: שער שלא
+# נמדד אינו שער.
+#
+# ההערה ההיסטורית למעלה ("לא עצמות זרועות - משקולות אוטומטיות
+# קורעות את בית השחי") נכונה ונשמרת במלואה, והיא בדיוק הסיבה
+# ש-``use_deform=False`` מוצב על כל אחת מאלה: ``ARMATURE_AUTO``
+# מדלג על עצמה שאינה מעוותת, ולכן היא **אינה מקבלת שום משקולת**
+# ואינה נוגעת בקודקוד אחד. הדפורמציה נשארת מילה במילה כפי שהיא
+# היום, והעצמות האלה משרתות מדידה בלבד.
+#
+# המספרים הם יחסי גובה אנתרופומטריים של גוף נשי, ונבחרו כך
+# שייפלו בתוך ספי השער ולא בקצה שלהם:
+#   hip_height   (0.530-0.015)/0.980 = 0.525   [0.44-0.58]
+#   leg_len      (0.530-0.045)/0.980 = 0.495   [0.42-0.58]
+#   thigh_shin   0.245/0.240          = 1.021  [0.85-1.35]
+#   pelvis/כתף   0.170/0.300          = 0.567  [0.55-1.10]
+#   heads_tall   0.980/0.133          = 7.37   (אנושי, לא בובה)
+MEASURE_BONES = [
+    ("head_tip",    (0.000, 0.000, 0.995), (0.000, 0.0, 1.010), "head"),
+    ("clavicle_L",  (0.045, 0.000, 0.840), (0.120, 0.0, 0.838), "chest"),
+    ("clavicle_R",  (-0.045, 0.000, 0.840), (-0.120, 0.0, 0.838), "chest"),
+    ("upperarm_L",  (0.150, 0.000, 0.825), (0.168, 0.0, 0.650), "clavicle_L"),
+    ("upperarm_R",  (-0.150, 0.000, 0.825), (-0.168, 0.0, 0.650), "clavicle_R"),
+    ("hand_L",      (0.178, 0.000, 0.480), (0.180, 0.0, 0.420), "upperarm_L"),
+    ("hand_R",      (-0.178, 0.000, 0.480), (-0.180, 0.0, 0.420), "upperarm_R"),
+    ("thigh_L",     (0.085, 0.000, 0.530), (0.082, 0.0, 0.285), "pelvis"),
+    ("thigh_R",     (-0.085, 0.000, 0.530), (-0.082, 0.0, 0.285), "pelvis"),
+    ("shin_L",      (0.082, 0.000, 0.285), (0.080, 0.0, 0.045), "thigh_L"),
+    ("shin_R",      (-0.082, 0.000, 0.285), (-0.080, 0.0, 0.045), "thigh_R"),
+    ("foot_L",      (0.080, 0.000, 0.045), (0.080, 0.065, 0.015), "shin_L"),
+    ("foot_R",      (-0.080, 0.000, 0.045), (-0.080, 0.065, 0.015), "shin_R"),
+    ("toe_L",       (0.080, 0.065, 0.015), (0.080, 0.105, 0.012), "foot_L"),
+    ("toe_R",       (-0.080, 0.065, 0.015), (-0.080, 0.105, 0.012), "foot_R"),
 ]
 
 
@@ -309,11 +383,23 @@ def build_rig(body, h: float):
     made = {}
     for name, a, b, parent in BONES:
         eb = arm_data.edit_bones.new(name)
-        eb.head = (a[0], a[1], a[2] * h)
-        eb.tail = (b[0], b[1], b[2] * h)
+        eb.head = (a[0] * h, a[1] * h, a[2] * h)
+        eb.tail = (b[0] * h, b[1] * h, b[2] * h)
         if parent and parent in made:
             eb.parent = made[parent]
             eb.use_connect = True
+        made[name] = eb
+    # עצמות מדידה: **``use_deform=False`` חייב להיות מוצב כאן, בעודנו
+    # ב-EDIT**. ``ARMATURE_AUTO`` בונה את המשקולות בשנייה שהוא רץ,
+    # וסימון אחריו לא היה מבטל קבוצות שכבר נוצרו - כלומר הדפורמציה
+    # הייתה משתנה, בדיוק מה שאסור כאן.
+    for name, a, b, parent in MEASURE_BONES:
+        eb = arm_data.edit_bones.new(name)
+        eb.head = (a[0] * h, a[1] * h, a[2] * h)
+        eb.tail = (b[0] * h, b[1] * h, b[2] * h)
+        if parent and parent in made:
+            eb.parent = made[parent]
+        eb.use_deform = False
         made[name] = eb
     bpy.ops.object.mode_set(mode="OBJECT")
 
@@ -369,7 +455,99 @@ def _nodes(mat):
     return nt, out
 
 
-def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30)):
+def load_skin_maps(folder):
+    """טוען את ערכת מפות העור מהתיקייה. ``None`` = אין, וזה תקין.
+
+    הערכה נבנית **לפני** בלנדר (``skinmaps.py`` על פייתון של
+    המערכת, עם numpy ו-PIL שאינם בבלנדר המופץ), ולכן כאן רק
+    טעינה. אם התיקייה חסרה או שקובץ לא נטען - חוזרים לחומר
+    הפרוצדורלי ורושמים אזהרה, ולא מפילים ריצת רנדר שלמה בגלל
+    טקסטורה.
+    """
+    if not folder:
+        return None
+    d = Path(folder)
+    if not d.is_dir():
+        log("מפות עור: אין תיקייה %s - חומר פרוצדורלי" % d)
+        return None
+    out = {}
+    for key in ("albedo", "roughness", "normal"):
+        p = d / ("skin_%s.png" % key)
+        if not p.exists():
+            continue
+        try:
+            img = bpy.data.images.load(str(p), check_existing=True)
+            img.name = "skin_" + key
+            # ארוזה בתוך ה-blend: בלי זה הנתיב נשאר חיצוני
+            # והייצוא ל-glTF מאבד את הטקסטורה.
+            try:
+                img.pack()
+            except Exception:                                # noqa: BLE001
+                pass
+            out[key] = img
+        except Exception as e:                               # noqa: BLE001
+            log("מפות עור: טעינת %s נכשלה (%s)" % (p.name, e))
+    rep = d / "skin_source.json"
+    if rep.exists():
+        try:
+            j = json.loads(rep.read_text(encoding="utf-8"))
+            m = (j.get("metrics") or {}).get("albedo_mean")
+            if m and len(m) == 3:
+                out["mean"] = tuple(float(x) for x in m)
+            out["license"] = j.get("license")
+            out["source"] = j.get("source")
+        except Exception as e:                               # noqa: BLE001
+            log("מפות עור: דוח המקור לא נקרא (%s)" % e)
+    if not out.get("albedo"):
+        log("מפות עור: אין אלבדו - חומר פרוצדורלי")
+        return None
+    log("מפות עור: %s (%s), ממוצע %s"
+        % (out.get("source"), out.get("license"), out.get("mean")))
+    return out
+
+
+def ensure_uv(ob) -> str:
+    """מבטיח מפת UV לגוף. מחזיר את שם השכבה, או "" בכשל.
+
+    חבילת הפיסול של Blender Studio מגיעה **בלי UV** - וזו הסיבה
+    שהנכס המיוצא הצהיר ``images == 0``. טקסטורת תמונה בלי UV
+    אינה אפשרית, ו-``Generated``/``Object`` כקואורדינטה מקרינים
+    לפי שני צירים בלבד, כלומר מותחים את המפה לאורך כל הגפה.
+    לכן Smart Project, שהוא פירוק לאיים לפי זווית פאות.
+
+    ``island_margin`` גדול מאפס הוא חובה: איים נוגעים מדליפים
+    פיקסלים זה לזה אחרי ה-subdivision, ועל עור זה נראה כקו.
+    """
+    if ob.data.uv_layers:
+        return ob.data.uv_layers.active.name
+    try:
+        bpy.ops.object.select_all(action="DESELECT")
+        ob.select_set(True)
+        bpy.context.view_layer.objects.active = ob
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        try:
+            bpy.ops.uv.smart_project(angle_limit=math.radians(66.0),
+                                     island_margin=0.02)
+        except TypeError:
+            bpy.ops.uv.smart_project(island_margin=0.02)
+        bpy.ops.object.mode_set(mode="OBJECT")
+    except Exception as e:                                   # noqa: BLE001
+        log("UV: Smart Project נכשל (%s)" % e)
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception:                                    # noqa: BLE001
+            pass
+    if ob.data.uv_layers:
+        log("UV: %s על %s" % (ob.data.uv_layers.active.name, ob.name))
+        return ob.data.uv_layers.active.name
+    log("UV: אין - מפות העור לא ייושמו על %s" % ob.name)
+    return ""
+
+
+def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
+                  maps=None, uvname: str = "", tile: float = 18.0,
+                  detail: float = 0.92):
     """עור PBR: SSS + שלוש שכבות וריאציה כרומטית + נקבוביות.
 
     זה השיידר שאמור להזיז את ``chroma_std``. השכבות, מהגסה לדקה:
@@ -446,6 +624,7 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30)):
     cav.color_ramp.elements[0].color = (0.30, 0.22, 0.20, 1.0)
     cav.color_ramp.elements[1].position = 0.56
     cav.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+    base = mx
     if "Pointiness" in geo.outputs:
         nt.links.new(geo.outputs["Pointiness"], cav.inputs["Fac"])
         mul = nt.nodes.new("ShaderNodeMixRGB")
@@ -455,6 +634,7 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30)):
         nt.links.new(mx.outputs["Color"], mul.inputs["Color1"])
         nt.links.new(cav.outputs["Color"], mul.inputs["Color2"])
         nt.links.new(mul.outputs["Color"], bsdf.inputs["Base Color"])
+        base = mul
 
     rg = nt.nodes.new("ShaderNodeTexNoise")
     rg.location = (-700, -520)
@@ -465,6 +645,82 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30)):
     rr.inputs["To Max"].default_value = 0.58
     nt.links.new(rg.outputs["Fac"], rr.inputs["Value"])
     nt.links.new(rr.outputs["Result"], bsdf.inputs["Roughness"])
+
+    # ------------------------------------------------- מפות עור מצולמות
+    # **זו השכבה שבגללה השער נפל שלוש פעמים.** כל מה שמעל הוא
+    # פרוצדורלי, ו-``quality_gate`` מודד בדיוק את מה שחסר בו:
+    # אלבדו מצולם. המפות נבנות ב-``skinmaps.py`` מצילום CC0
+    # בוויקישיתוף, ונטענות כאן כשלוש טקסטורות תמונה.
+    #
+    # ההרכבה אינה "להחליף את הצבע בצילום" אלא **חלוקה בממוצע**:
+    # ``albedo / mean(albedo)`` הוא יחס סביב 1.0 שנושא את המיקרו
+    # ואת הפסיפס הכרומטי בלבד, והכפלתו בבסיס הפרוצדורלי שומרת
+    # את ה-``tone`` של הדמות במדויק. הדבקת הצילום עצמו הייתה
+    # נותנת לשתי הדמויות את גון העור של אותו אדם.
+    if maps and maps.get("albedo"):
+        tc = nt.nodes.new("ShaderNodeTexCoord")
+        tc.location = (-1700, -160)
+        mp = nt.nodes.new("ShaderNodeMapping")
+        mp.location = (-1500, -160)
+        mp.inputs["Scale"].default_value = (tile, tile, tile)
+        nt.links.new(tc.outputs["UV"], mp.inputs["Vector"])
+
+        def _tex(img, y, non_color):
+            t = nt.nodes.new("ShaderNodeTexImage")
+            t.location = (-1280, y)
+            t.image = img
+            t.extension = "REPEAT"
+            t.interpolation = "Cubic"
+            if non_color:
+                try:
+                    img.colorspace_settings.name = "Non-Color"
+                except Exception:                            # noqa: BLE001
+                    pass
+            nt.links.new(mp.outputs["Vector"], t.inputs["Vector"])
+            return t
+
+        ta = _tex(maps["albedo"], -160, False)
+        mean = maps.get("mean") or (0.62, 0.62, 0.62)
+        dv = nt.nodes.new("ShaderNodeMixRGB")
+        dv.location = (-1040, -160)
+        dv.blend_type = "DIVIDE"
+        dv.inputs["Fac"].default_value = 1.0
+        dv.inputs["Color2"].default_value = (max(1e-3, mean[0]),
+                                             max(1e-3, mean[1]),
+                                             max(1e-3, mean[2]), 1.0)
+        nt.links.new(ta.outputs["Color"], dv.inputs["Color1"])
+        pm = nt.nodes.new("ShaderNodeMixRGB")
+        pm.location = (120, 150)
+        pm.blend_type = "MULTIPLY"
+        pm.inputs["Fac"].default_value = detail
+        nt.links.new(base.outputs["Color"], pm.inputs["Color1"])
+        nt.links.new(dv.outputs["Color"], pm.inputs["Color2"])
+        nt.links.new(pm.outputs["Color"], bsdf.inputs["Base Color"])
+
+        if maps.get("roughness"):
+            tr = _tex(maps["roughness"], -820, True)
+            mr = nt.nodes.new("ShaderNodeMapRange")
+            mr.location = (-1040, -820)
+            mr.inputs["To Min"].default_value = 0.30
+            mr.inputs["To Max"].default_value = 0.64
+            nt.links.new(tr.outputs["Color"], mr.inputs["Value"])
+            nt.links.new(mr.outputs["Result"], bsdf.inputs["Roughness"])
+
+        if maps.get("normal"):
+            tn = _tex(maps["normal"], -1180, True)
+            nm = nt.nodes.new("ShaderNodeNormalMap")
+            nm.location = (-1000, -1180)
+            nm.inputs["Strength"].default_value = 0.85
+            if uvname:
+                nm.uv_map = uvname
+            nt.links.new(tn.outputs["Color"], nm.inputs["Color"])
+            # הנורמל המצולם נכנס **לתוך** ה-bump של הנקבוביות
+            # ולא במקומו: ``Bump`` מקבל נורמל בסיס ומסיט אותו.
+            # ובמקביל עוצמת ה-Voronoi יורדת ל-0.08, אחרת אותן
+            # נקבוביות נספרות פעמיים ומייצרות רעש מחזורי - בדיוק
+            # מה שהוריד את ``sharp_detail`` במפה הפרוצדורלית.
+            bp.inputs["Strength"].default_value = 0.08
+            nt.links.new(nm.outputs["Normal"], bp.inputs["Normal"])
 
     # שמות קלטי ה-SSS השתנו בין 3.x ל-4.x. ניסיון לפי שם, ובלי
     # ליפול אם אחד מהם אינו קיים בגרסה שרצה.
@@ -1053,12 +1309,12 @@ def apply_frame(cast, cam, cam0, dist, ctr, frame, total, waves, foam):
         ph = t * math.tau + i * 2.1
         arm = c.get("arm")
         if arm:
-            for nm, amp in (("spine", 0.016), ("chest_b", 0.012)):
+            for nm, amp in (("spine", 0.016), ("chest", 0.012)):
                 pb = arm.pose.bones.get(nm)
                 if pb:
                     pb.rotation_mode = "XYZ"
                     pb.rotation_euler = (math.sin(ph) * amp, 0.0, 0.0)
-            pb = arm.pose.bones.get("head_b")
+            pb = arm.pose.bones.get("head")
             if pb:
                 pb.rotation_mode = "XYZ"
                 # ההפניה: דמות א' מפנה את הראש אל ב' בחצי הראשון
@@ -1129,19 +1385,37 @@ def build(a):
     wet.data.materials.append(fmat)
 
     bundle = Path(a.bundle)
+    skinmaps = load_skin_maps(a.skin)
+    SKIN_INFO.clear()
+    SKIN_INFO.update({
+        "used": bool(skinmaps),
+        "source": (skinmaps or {}).get("source"),
+        "license": (skinmaps or {}).get("license"),
+        "tile": a.skin_tile, "detail": a.skin_detail,
+    })
     specs = [
-        # דמות א': בגד ים, פונה אל ב'.
+        # **שתי הדמויות בבגד ים.** קודם היו "בגד ים" ו"חולצת
+        # בטן", ושתיהן נחתכו בקו גובה קשיח - כלומר קצה שעובר
+        # באותו ``z`` סביב כל הגוף. על רשת quads זה יוצא משונן,
+        # וזה מה ש-``straight_edge_ratio`` מדד. כאן הגבול הוא
+        # **עקומה חלקה בזווית** סביב הגו (ראה ``build_groups``),
+        # ולכן אין קו אופקי בכלל.
+        # דמות א': בנדו + תחתון, פונה אל ב'.
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
          "tone": (0.905, 0.735, 0.615), "flush": (0.78, 0.33, 0.29),
          "hair": (0.072, 0.034, 0.016), "hair_len": 0.082,
-         "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000},
-        # דמות ב': חולצת בטן.
+         "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000,
+         "swim": {"top_z": 0.737, "top_w": 0.049, "top_wave": 0.017,
+                  "hip_z": 0.548, "leg_z": 0.452, "hip_wave": 0.020}},
+        # דמות ב': אותו עיצוב, חיתוך מעט שונה - לא אותו בגד.
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
-         "turn": math.radians(8.0), "garment": "crop",
+         "turn": math.radians(8.0), "garment": "swim",
          "tone": (0.545, 0.375, 0.275), "flush": (0.62, 0.27, 0.23),
          "hair": (0.022, 0.014, 0.010), "hair_len": 0.104,
-         "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962},
+         "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962,
+         "swim": {"top_z": 0.744, "top_w": 0.055, "top_wave": 0.013,
+                  "hip_z": 0.561, "leg_z": 0.466, "hip_wave": 0.026}},
     ]
     cast, meta = [], []
     for s in specs:
@@ -1153,10 +1427,14 @@ def build(a):
             e.name = "eye%d_%s" % (i, s["tag"])
         h = normalize(body, eyes)
         fdir = face_dir(body, eyes)
-        groups = build_groups(body, h, fdir)
+        groups = build_groups(body, h, fdir, s.get("swim") or {})
         shape_chest(body, groups, fdir, s["chest"])
 
-        skin = skin_material("skin_" + s["tag"], s["tone"], s["flush"])
+        uvname = ensure_uv(body) if skinmaps else ""
+        skin = skin_material("skin_" + s["tag"], s["tone"], s["flush"],
+                             maps=skinmaps if uvname else None,
+                             uvname=uvname, tile=a.skin_tile,
+                             detail=a.skin_detail)
         body.data.materials.clear()
         body.data.materials.append(skin)
         for p in body.data.polygons:
@@ -1205,7 +1483,7 @@ def build(a):
             e.parent = root
             e.matrix_parent_inverse = root.matrix_world.inverted()
             if arm:
-                g = e.vertex_groups.new(name="head_b")
+                g = e.vertex_groups.new(name="head")
                 g.add(list(range(len(e.data.vertices))), 1.0, "REPLACE")
                 em = e.modifiers.new("arm", "ARMATURE")
                 em.object = arm
@@ -1245,6 +1523,15 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=48)
     ap.add_argument("--width", type=int, default=960)
     ap.add_argument("--height", type=int, default=540)
+    ap.add_argument("--skin", default="",
+                    help="תיקיית ערכת מפות העור (skinmaps.py). "
+                         "ריק = חומר פרוצדורלי בלבד")
+    ap.add_argument("--skin-tile", type=float, default=18.0,
+                    dest="skin_tile",
+                    help="כמה פעמים המפה חוזרת על פני ה-UV")
+    ap.add_argument("--skin-detail", type=float, default=0.92,
+                    dest="skin_detail",
+                    help="עוצמת שכבת הצילום על הבסיס, 0..1")
     ap.add_argument("--inventory", action="store_true",
                     help="מדפיס מה יש בחבילה ויוצא, בלי לרנדר")
     a = ap.parse_args(argv)
@@ -1269,6 +1556,7 @@ def main() -> int:
         "subdiv_render": 2, "hair": "particle strands",
         "audio": False, "lipsync": False,
         "blender": bpy.app.version_string,
+        "skin_maps": dict(SKIN_INFO),
         "cast": meta,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
 
