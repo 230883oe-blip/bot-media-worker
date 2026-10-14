@@ -1797,7 +1797,15 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
         res = body.ray_cast(org, dirv, distance=1.2)
         ok, loc = bool(res[0]), res[1]
         if ok:
-            v.co = mathutils.Vector((v.co.x, loc.y + fdir * 0.0085, v.co.z))
+            # **1.8 ס"מ ולא 8.5 מ"מ.** הגוף מקבל ``SUBSURF`` ברמה 2
+            # עם ``use_limit_surface``, והקרן נורית אל הרשת ה**בסיסית**
+            # (``ray_cast`` אינו רואה מודיפיירים). על רשת שמרווח
+            # הטבעות בה 2.5 ס"מ, משטח הגבול של Catmull-Clark יכול
+            # לנוע מילימטרים ספורים ביחס לרשת הבקרה - ובדיוק
+            # בשיעור הזה הבד נקבר. זה מסביר למה כל מדידה שעשיתי
+            # אישרה אותו: כולן נמדדו מול הרשת הבסיסית, והרנדר
+            # מראה את משטח הגבול.
+            v.co = mathutils.Vector((v.co.x, loc.y + fdir * 0.018, v.co.z))
             hit_n += 1
         else:
             v.co = _stick_to_body(v.co, body, 0.0085)
