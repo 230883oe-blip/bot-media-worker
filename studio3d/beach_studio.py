@@ -1740,14 +1740,22 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
         used.append("Clump")
     if "Hair Curves Noise" in ng:
         # גל רך לאורך הגדיל. ``Scale`` גדול = גל ארוך.
+        # **1.6 ס"מ ולא 7.5, וזה ההבדל בין תסרוקת לכדור.**
+        # ``Input_11`` הוא עוצמת ההזזה במטרים, והערך 0.075
+        # הזיז כל נקודה עד 7.5 ס"מ לכיוון אקראי - על ראש
+        # שרדיוסו 9 ס"מ. כלומר הרעש לבדו גדול כמעט כמו הראש,
+        # והגדילים נפרשו לכל הכיוונים: בדיוק הפלומה הכדורית
+        # שנראתה בפריים, ושבה הפנים מכוסות לגמרי.
         _gn(ob, ng["Hair Curves Noise"], "noise",
-            {"Input_3": 0.16, "Input_2": 0.90, "Input_11": 0.075,
+            {"Input_3": 0.16, "Input_2": 0.90, "Input_11": 0.016,
              "Input_12": 1.0, "Input_13": 0.6, "Input_8": seed,
              "Input_6": True})
         used.append("Noise")
     if "Frizz Hair Curves" in ng:
+        # 1.4 ס"מ ולא 7: אותו שיקול בדיוק כמו ברעש. פריז הוא
+        # סלסול בקצה הגדיל, לא קוטר התסרוקת.
         _gn(ob, ng["Frizz Hair Curves"], "frizz",
-            {"Input_3": 0.07, "Input_11": 0.0009, "Input_2": 0.92,
+            {"Input_3": 0.014, "Input_11": 0.0009, "Input_2": 0.92,
              "Input_8": seed + 2, "Input_6": True})
         used.append("Frizz")
     if "Smooth Hair Curves" in ng:
@@ -1762,6 +1770,69 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
             {"Input_2": body, "Input_5": 1.0, "Input_4": 0.004,
              "Input_8": 0.007, "Input_6": 3, "Input_7": True})
         used.append("Shrinkwrap")
+    # --- **קיבוע ה-grooming וחסם פנים על התוצאה האמיתית.**
+    #
+    # זה הפער שהחזיק שישה סבבים: החסם רץ על ``pts`` - הגדילים
+    # כפי שנבנו - והיומן דיווח בכנות "בתיבת הפנים: 0". אבל
+    # Clump/Noise/Frizz רצים **אחרי** הספירה הזו ומזיזים כל
+    # נקודה עד כמה סנטימטרים, ולכן אותם גדילים בדיוק חוזרים אל
+    # הפנים בזמן הרנדר. כלומר המדידה הייתה נכונה ולא רלוונטית.
+    #
+    # כאן ה-grooming **מוערך ונכתב בחזרה אל הנקודות**, המודיפיירים
+    # שלו מוסרים, והחסם רץ על התוצאה. מכאן והלאה המספר ביומן
+    # הוא מה שהמצלמה תראה. ``deform`` מנוטרל זמנית כדי שלא
+    # ייאפה פעמיים (הוא חייב להישאר חי לרנדר).
+    face_ceiling = brow + 0.025
+    baked = 0
+    fixed = 0
+    groom_names = ("clump", "noise", "frizz", "smooth", "shrink")
+    gmods = [m for m in ob.modifiers if m.name in groom_names]
+    if gmods:
+        dfm = [m for m in ob.modifiers if m.name == "deform"]
+        prev = [(m, m.show_viewport) for m in dfm]
+        try:
+            for m, _ in prev:
+                m.show_viewport = False
+            bpy.context.view_layer.update()
+            dg = bpy.context.evaluated_depsgraph_get()
+            ed = ob.evaluated_get(dg).data
+            n0 = len(cu.points)
+            n1 = len(ed.points)
+            if n1 == n0 and n0:
+                flat = [0.0] * (n0 * 3)
+                ed.points.foreach_get("position", flat)
+                baked = n0
+            else:
+                log("    (ה-grooming שינה %d -> %d נקודות - לא קובע)"
+                    % (n0, n1))
+        except Exception as e:                               # noqa: BLE001
+            log("    (קיבוע ה-grooming נכשל: %s)" % e)
+            flat = None
+        finally:
+            for m, v in prev:
+                m.show_viewport = v
+        if baked:
+            # חסם הפנים על הנקודות האפויות - אותה הזזה מינימלית
+            # הצידה, אבל הפעם על מה שבאמת מרונדר. התקרה היא
+            # 2.5 ס"מ **מעל** קו הגבות, כי תיבת הפנים של שער
+            # האיכות מתחילה במצח ולא בגבה.
+            for i in range(baked):
+                x, y, z = flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]
+                if (z < face_ceiling and (y - cy) * fdir > -FACE_BACK
+                        and abs(x - head_x) < FACE_HALF):
+                    side = 1.0 if x >= head_x else -1.0
+                    flat[3 * i] = head_x + side * FACE_HALF * 1.06
+                    fixed += 1
+            cu.points.foreach_set("position", flat)
+            cu.update_tag()
+            for m in gmods:
+                ob.modifiers.remove(m)
+            # הנקודות האפויות הן עכשיו מקור האמת למדידה.
+            pts = [mathutils.Vector((flat[3 * i], flat[3 * i + 1],
+                                     flat[3 * i + 2]))
+                   for i in range(baked)]
+            log("    grooming קובע ב-%d נקודות · %d נקודות פונו "
+                "מתיבת הפנים (תקרה z=%.3f)" % (baked, fixed, face_ceiling))
     if "Set Hair Curve Profile" in ng:
         # 0.14 מ"מ ברדיוס. שערה אנושית היא 0.05-0.09 מ"מ ברדיוס,
         # אבל כאן גדיל אחד מייצג כמה שערות (45 אלף גדילים מול
@@ -1773,8 +1844,12 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
         used.append("Profile")
 
     # --- המדידה שמחליפה את ההנחה
+    # **הספירה הזו רצה על הנקודות שאחרי ה-grooming**, כי זה מה
+    # שהמצלמה רואה. ראה הקיבוע למעלה. התקרה היא אותה תקרה
+    # שנאכפה, ולא ``brow`` - אחרת היומן שוב מודד משהו אחר ממה
+    # שתוקן.
     in_face = sum(1 for p in pts
-                  if p.z < brow and (p.y - cy) * fdir > -FACE_BACK
+                  if p.z < face_ceiling and (p.y - cy) * fdir > -FACE_BACK
                   and abs(p.x - head_x) < FACE_HALF)
     log("  שיער עקומות (נכס אולפן): %d גדילים × %d נקודות · "
         "קו גבות %.3f (%s) · %d נקודות סורקו אל הרקה · "
@@ -2218,6 +2293,89 @@ def log_evaluated(ob, tag=""):
         return -1
 
 
+def _render_surface_bvh(body):
+    """BVH של **המשטח שהרנדרר רואה**, בקואורדינטות עולם.
+
+    זו הנקודה העיוורת שהחזיקה שישה סבבים של "גביעים תקינים
+    ופריים ריק". כל המדידות עד כה רצו מול ``body.data`` או
+    ``closest_point_on_mesh``, ושתיהן קוראות את הרשת ה**בסיסית**.
+    הרנדר רואה את השרשרת כולה, ובראשה ``SUBSURF`` שבו
+    ``levels=0`` ו-``render_levels=2``: כלומר בכל מדידה שנעשתה
+    כאן החלוקה פשוט לא הייתה קיימת. משטח Catmull-Clark יכול
+    לנוע מילימטרים ספורים לכל כיוון ביחס לרשת הבקרה - פנימה
+    על בליטה, **החוצה** בשקע - ובדיוק בשיעור הזה בד שנמדד
+    "18 מ"מ מחוץ לעור" נבלע.
+
+    לכן כאן ה-``SUBSURF`` מועלה זמנית לרמת הרנדר, המש מוערך,
+    ומוחזר. המחיר הוא הערכה אחת; הרווח הוא שהמדידה והרנדר
+    מסתכלים סוף סוף על אותו דבר.
+    """
+    from mathutils.bvhtree import BVHTree                    # noqa: PLC0415
+    saved = []
+    for m in body.modifiers:
+        if m.type == "SUBSURF":
+            saved.append((m, m.levels))
+            m.levels = m.render_levels
+    try:
+        bpy.context.view_layer.update()
+        dg = bpy.context.evaluated_depsgraph_get()
+        ev = body.evaluated_get(dg)
+        me = ev.to_mesh()
+        mw = ev.matrix_world
+        vs = [mw @ v.co for v in me.vertices]
+        ps = [tuple(p.vertices) for p in me.polygons]
+        tree = BVHTree.FromPolygons(vs, ps, all_triangles=False)
+        n = len(vs)
+        ev.to_mesh_clear()
+    finally:
+        for m, lv in saved:
+            m.levels = lv
+        bpy.context.view_layer.update()
+    return tree, mw, n
+
+
+def _clear_of_render_surface(ob, body, margin=0.012):
+    """דוחף כל קודקוד של הבגד אל מחוץ למשטח **המרונדר**.
+
+    ``find_nearest`` מחזיר גם את הנורמל של הפאה הקרובה, ולכן
+    הסימן של ``(p-loc)·n`` אומר אם הנקודה בפנים או בחוץ. כל
+    נקודה שאינה לפחות ``margin`` מחוץ למשטח מועברת אל
+    ``loc + n*margin``. זו **הבטחה** ולא כוונון: אחרי המעבר
+    הזה אין קודקוד בגד אחד שיכול להיקבר, בלי קשר לשאלה מה
+    בדיוק עשתה החלוקה.
+    """
+    try:
+        tree, mw, nv = _render_surface_bvh(body)
+    except Exception as e:                                   # noqa: BLE001
+        log("    (לא נבנה BVH של משטח הרנדר: %s)" % e)
+        return None
+    inv = ob.matrix_world.inverted()
+    before = []
+    after = []
+    moved = 0
+    for v in ob.data.vertices:
+        wco = ob.matrix_world @ v.co
+        res = tree.find_nearest(wco)
+        if res is None or res[0] is None:
+            continue
+        loc, nrm = res[0], res[1]
+        d = (wco - loc).dot(nrm)
+        before.append(d)
+        if d < margin:
+            v.co = inv @ (loc + nrm * margin)
+            d = margin
+            moved += 1
+        after.append(d)
+    if not before:
+        return None
+    lo_b, lo_a = min(before), min(after)
+    log("    מול משטח הרנדר (%d קודקודים אחרי חלוקה): מרחק לפני "
+        "%.4f..%.4f · הוזזו %d/%d · אחרי %.4f..%.4f"
+        % (nv, lo_b, max(before), moved, len(before), lo_a, max(after)))
+    return {"verts": len(before), "moved": moved,
+            "min_before": round(lo_b, 5), "min_after": round(lo_a, 5)}
+
+
 def _stick_to_body(co, body, offset):
     """מצמיד נקודה למשטח הגוף + הזזה לאורך הנורמל (Shrinkwrap אפוי).
 
@@ -2439,6 +2597,10 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     ob.data.materials.append(mat)
     for p in ob.data.polygons:
         p.use_smooth = True
+    # **הפינוי מול משטח הרנדר - וזה התיקון שסגר שישה סבבים.**
+    # עד כאן כל ההצמדה נעשתה מול הרשת הבסיסית, שהיא לא מה
+    # שמרונדר. ראה ``_render_surface_bvh``.
+    _clear_of_render_surface(ob, body, margin=0.012)
     # **מדידה ביומן, לא הצהרה.** שני סבבים דיווחו "2 גביעים
     # נפרדים, 751 קודקודים" בזמן שבפריים לא הופיע דבר - כי
     # קודקודים אינם פאות, ומש בלי פאות אינו מרונדר. מכאן ואילך
@@ -2842,8 +3004,14 @@ def sand_grid(name="sand", loc=(0.0, -46.0, 0.0)):
         # בדיוק מה ש-``turbulence`` עושה. שכבה שנייה בקנה מידה אחר
         # שוברת את המחזוריות שנותרה.
         ("sand_ripples", "WOOD", 0.62, 0.042, 0),
-        ("sand_ripples2", "WOOD", 0.27, 0.019, 0),
-        ("sand_micro", "CLOUDS", 0.115, 0.0085, 2),
+        # **0.34 ו-0.30 ולא 0.27 ו-0.115, וזו שוב שאלת תדר ולא
+        # עומק.** התא בשדה הקרוב הוא 8.5 ס"מ, כלומר השכבה של
+        # 11.5 ס"מ נדגמת 1.35 פעמים לתקופה - מתחת לניקוויסט,
+        # ולכן היא לא הוסיפה **דבר** לתבליט והוסיפה רק רעש
+        # דגימה. שער האיכות מדד 0.0091 מול סף 0.0100 בדיוק
+        # בגלל זה. 30 ס"מ הם 3.5 דגימות לתקופה, וזה מתקיים.
+        ("sand_ripples2", "WOOD", 0.34, 0.026, 0),
+        ("sand_micro", "CLOUDS", 0.30, 0.016, 2),
     )
     for nm, kind, sc, st, depth in specs:
         tex = bpy.data.textures.new(nm, type=kind)
