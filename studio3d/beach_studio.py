@@ -1725,6 +1725,11 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
         return None
     for k in apex:
         apex[k].z = zc
+    # ציר הגו בגובה החזה - נקודת המוצא של ירי הקרן. נמדד
+    # מהרשת, כי הגוף אינו ממורכז ב-y=0 (ראה ``hair_shell``).
+    tor = [v.y for v in vs if zlo - 0.05 < v.z < zhi + 0.05
+           and abs(v.x) < 0.060]
+    cy_torso = sum(tor) / len(tor) if tor else cy
     half = abs(apex["L"].x - apex["R"].x) * 0.5
     # רוחב חצי-גביע: 74% מהמרחק בין הפטמות. יותר מזה ושני
     # המשולשים נוגעים בעצם החזה ומתמזגים חזרה לרצועה אחת -
@@ -1768,9 +1773,36 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     me.validate()
     ob = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(ob)
-    # הצמדה למשטח הגוף: כל קודקוד יושב בדיוק על העור + 8 מ"מ.
+    # **הצמדה בירי קרן קדימה, ולא ב"הנקודה הקרובה ביותר".**
+    #
+    # זה היה השורש של שלושה סבבים ריקים. ``closest_point_on_mesh``
+    # מחזיר את הנקודה הקרובה, ועל חזה נשי הנקודה הקרובה לרוב
+    # **אינה** החזית אלא קפל הסטרנום שבין השדיים או הקפל שמתחת
+    # להם. התוצאה: הבד נצמד לקפל, 8 מ"מ מעליו - ולכן הוא תקין
+    # לגמרי בכל מדידה שעשיתי, **ועדיין מוסתר מאחורי השדיים**.
+    # המדידה "8 מ"מ מהעור" אפילו אישרה אותו, כי היא מדדה מרחק
+    # מאותה נקודה קרובה שאליה הוא הוצמד - כלומר מדדה את עצמה.
+    # המדד שסגר את זה היה המש **המוערך** בקואורדינטות עולם:
+    # קצה החזית שלו יצא 2 ס"מ מאחורי קצה החזית של הרצועות.
+    #
+    # ירי קרן **מתוך** הגו כלפי חוץ פוגע תמיד במשטח החיצוני
+    # הראשון, כלומר בצללית - ולכן אינו יכול ליפול לקפל.
+    axis_y = cy_torso
+    hit_n = 0
     for v in ob.data.vertices:
-        v.co = _stick_to_body(v.co, body, 0.0080)
+        org = mathutils.Vector((v.co.x, axis_y, v.co.z))
+        dirv = mathutils.Vector((0.0, fdir, 0.0))
+        # ``ray_cast`` מחזיר (result, location, normal, index) - נקרא
+        # לפי אינדקס כדי שגרסה שתוסיף שדה לא תשבור את הפריקה.
+        res = body.ray_cast(org, dirv, distance=1.2)
+        ok, loc = bool(res[0]), res[1]
+        if ok:
+            v.co = mathutils.Vector((v.co.x, loc.y + fdir * 0.0085, v.co.z))
+            hit_n += 1
+        else:
+            v.co = _stick_to_body(v.co, body, 0.0085)
+    log("    הצמדה: %d/%d קודקודים בירי קרן קדימה"
+        % (hit_n, len(ob.data.vertices)))
     bm = bmesh.new()
     bm.from_mesh(ob.data)
     # 0.4 מ"מ ולא 1.4: הסף הקודם איחד קודקודים שכנים בתוך הגביע
