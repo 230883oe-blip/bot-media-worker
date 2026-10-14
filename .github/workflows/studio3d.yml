@@ -159,7 +159,8 @@ jobs:
               --hdri hdri/beach.hdr --out artifacts/smoke \
               --skin skin --subdiv ${SUBDIV} --skin-tile ${TILE} \
               --start $F --end $F --total ${TOTAL} \
-              --samples 24 --width 480 --height 270
+              --samples ${{ inputs.samples }} \
+              --width ${{ inputs.width }} --height ${{ inputs.height }}
           done
           ls -l artifacts/smoke
           test -s artifacts/smoke/f0001.png
