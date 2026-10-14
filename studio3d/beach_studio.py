@@ -1205,6 +1205,504 @@ def add_hair(body, length: float, col, count=4200, children=16,
     return md
 
 
+# =========== סבב 14/10 (ה) - נכסי אולפן חיצוניים: Hair Curves ===========
+#
+# ההנחיה: להפסיק לחשב כל קודקוד מאפס ולהביא נכס מוכן מאולפן.
+# הנכס שנבחר הוא **ספריית הנודים הרשמית של Blender Studio**,
+# ``datafiles/assets/geometry_nodes/procedural_hair_node_assets.blend``,
+# שמגיעה **בתוך כל הפצת בלנדר** - כלומר גם על הרנר, בלי הורדה,
+# בלי חשבון ובלי מפתח. 27 קבוצות נודים, ביניהן ``Clump Hair
+# Curves``, ``Frizz Hair Curves``, ``Hair Curves Noise``,
+# ``Smooth Hair Curves``, ``Shrinkwrap Hair Curves`` ו-``Set Hair
+# Curve Profile`` - אותן קבוצות שהאולפן עצמו משתמש בהן ב-Charge
+# ו-Wing It. אלה הן ה-grooming החיצוני שההנחיה דורשת.
+#
+# למה זה אפשרי עכשיו והיה "בלתי אפשרי" ב-``add_hair``: ההערה שם
+# אמרה ש-Curves דורש הקשר ממשק, וזה נכון **רק ל-operator**
+# (``curves.sculptmode_toggle`` / ``object.curves_empty_hair_add``).
+# ``bpy.data.hair_curves.new()`` + ``add_curves()`` הוא API נתונים
+# טהור ועובד מצוין ב-``-b``. ההנחה הזו עלתה ארבעה סבבים.
+
+HAIR_ASSETS = ("datafiles/assets/geometry_nodes/"
+               "procedural_hair_node_assets.blend")
+# כמה אחורה מציר הראש חייבת נקודת שיער להיות כדי שלא תיחשב
+# "מול הפנים". 4 מ"מ הוא גם הסף שבו החסם נדלק וגם יחידת
+# ההרחקה שלו (×3), ולכן שניהם זזים יחד ולא נופלים זה על זה.
+FACE_BACK = 0.004
+# חצי רוחב **הפנים** (לא הראש). רקה אנושית יושבת קדימה מציר
+# הראש, ולכן מבחן "קדמי מהציר" לבדו מסמן גם את הרקות - ושם
+# שיער הוא **נכון**. 5.5 ס"מ הוא עמוד הפנים: עיניים, אף, פה.
+FACE_HALF = 0.055
+# קליפת האליפסואיד נשארת בקוד כנסיגה, כבויה. ראה ההערה בגוף
+# הלולאה: היא מדדה הילה במקום למנוע אותה.
+USE_SHELL = False
+
+
+def _hair_assets_path() -> Path:
+    """הנתיב לספריית נכסי השיער בתוך ההתקנה הנוכחית של בלנדר."""
+    return Path(bpy.utils.resource_path("LOCAL")) / HAIR_ASSETS
+
+
+def load_hair_nodes(want) -> dict:
+    """מייבא קבוצות נודים מספריית הנכסים הרשמית. {שם: node_group}.
+
+    ``link=False`` (append) ולא קישור: הרנר מוחק את תיקיית
+    ההתקנה אחרי השלב, וקובץ מקושר היה הופך לנתיב שבור בכל
+    ``.blend`` שנשמר. כאן הנכס נכנס פיזית לסצנה.
+    """
+    src_path = _hair_assets_path()
+    if not src_path.exists():
+        log("  נכסי שיער: לא נמצא %s" % src_path)
+        return {}
+    have = {g.name: g for g in bpy.data.node_groups if g.name in want}
+    need = [n for n in want if n not in have]
+    if need:
+        with bpy.data.libraries.load(str(src_path), link=False) as (src, dst):
+            missing = [n for n in need if n not in list(src.node_groups)]
+            if missing:
+                log("  נכסי שיער: חסרות קבוצות %s" % missing)
+            dst.node_groups = [n for n in need if n in list(src.node_groups)]
+        for g in bpy.data.node_groups:
+            if g.name in want:
+                have[g.name] = g
+    log("  נכסי אולפן: %d/%d קבוצות נודים מ-%s"
+        % (len(have), len(want), src_path.name))
+    return have
+
+
+def deform_curves_group():
+    """קבוצת נודים זעירה סביב ``Deform Curves on Surface`` המובנה.
+
+    הנוד עצמו מובנה בבלנדר ואינו נכס להורדה; מה שנבנה כאן הוא
+    רק העטיפה שמאפשרת להציב אותו כמודיפייר ``NODES``.
+    """
+    name = "DeformHairOnSurface"
+    g = bpy.data.node_groups.get(name)
+    if g is not None:
+        return g
+    g = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    g.interface.new_socket("Geometry", in_out="INPUT",
+                           socket_type="NodeSocketGeometry")
+    g.interface.new_socket("Geometry", in_out="OUTPUT",
+                           socket_type="NodeSocketGeometry")
+    gi = g.nodes.new("NodeGroupInput")
+    go = g.nodes.new("NodeGroupOutput")
+    gi.location = (-220, 0)
+    go.location = (220, 0)
+    d = g.nodes.new("GeometryNodeDeformCurvesOnSurface")
+    g.links.new(gi.outputs[0], d.inputs[0])
+    g.links.new(d.outputs[0], go.inputs[0])
+    return g
+
+
+def _gn(ob, ng, name, vals: dict):
+    """מודיפייר Geometry Nodes על נכס מיובא, עם קלטים לפי מזהה.
+
+    הקלטים נכתבים לפי ``identifier`` (``Input_7``) ולא לפי שם
+    התצוגה. שם תצוגה הוא מחרוזת מתורגמת ומשתנה בין גרסאות,
+    והצבה לשם שגוי **אינה נופלת** - היא פשוט לא עושה כלום,
+    וזה הסוג שמתגלה רק בפריים.
+    """
+    m = ob.modifiers.new(name, "NODES")
+    m.node_group = ng
+    ids = {it.identifier for it in ng.interface.items_tree
+           if getattr(it, "item_type", "") == "SOCKET"
+           and it.in_out == "INPUT"}
+    for k, v in vals.items():
+        if k not in ids:
+            log("    אזהרה: ל-%s אין קלט %s" % (ng.name, k))
+            continue
+        try:
+            m[k] = v
+        except Exception as e:                               # noqa: BLE001
+            log("    אזהרה: %s[%s] נכשל (%s)" % (ng.name, k, e))
+    return m
+
+
+def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
+                      strands=9000, npts=9, seed=11):
+    """שיער כ-**Hair Curves** עם ה-grooming הרשמי של Blender Studio.
+
+    שלושה דברים שמערכת החלקיקים לא נתנה, וכאן הם נתונים:
+
+    1. **הנקודות הן שלנו.** בחלקיקים ה"בנים" נוצרים בזמן רנדר
+       לפי ``roughness``/``kink``, ולכן אי אפשר למדוד לפני
+       הפריים אם גדיל נכנס לפנים - וזה בדיוק מה שהחזיק את
+       "השיער על הגבות" ארבעה סבבים. כאן כל נקודה נבנית כאן,
+       ולכן **נספרת**: אחרי הבנייה היומן אומר כמה נקודות נפלו
+       בתיבת הפנים, והחסם מתקן אותן עד שהמספר אפס.
+    2. **הסירוק הוא גאומטרי ולא מודיפייר.** הגדיל יוצא בנורמל
+       הקרקפת ומתכופף אל כיוון המסרק לאורכו, כלומר כבידה
+       מזויפת - ולא "ענן רדיאלי + clump" שמצטבר לכדור.
+    3. **העיצוב מגיע מהאולפן.** Clump/Noise/Frizz/Smooth/
+       Shrinkwrap/Profile הם קבוצות הנודים של Blender Studio,
+       לא נוסחאות שכתבתי.
+    """
+    me = body.data
+    vs = [v.co.copy() for v in me.vertices]
+    nrm = [v.normal.copy() for v in me.vertices]
+    hv = [v for v in vs if v.z / h > 0.880]
+    cy = sum(v.y for v in hv) / max(1, len(hv)) if hv else 0.0
+    brow, how = _brow_z(body, eyes, h)
+    # מרכז הראש בציר האנכי - ציר הסיבוב של חסם הפנים.
+    hz = [v.z for v in vs if v.z / h > 0.880]
+    head_z = (min(hz) + max(hz)) * 0.5 if hz else h * 0.92
+    head_x = sum(v.x for v in hv) / max(1, len(hv)) if hv else 0.0
+    # --- **קליפת הראש כאליפסואיד, וזה מה שמונע כתר קירח.**
+    #
+    # בפריים המבחן הראשון השיער יצא כזר סביב הראש והכתר נשאר
+    # חשוף. הסיבה: גדיל שיוצא מהכתר, שם הנורמל מצביע מעלה
+    # והמסרק מצביע מטה, מתיישר תוך שתי נקודות לקו אנכי - כלומר
+    # יורד **דרך** הגולגולת. ``Shrinkwrap`` מצמיד אותו אז
+    # לנקודה הקרובה ביותר, שעבור נקודה בתוך הגולגולת היא הצד -
+    # ולכן כל שיער הכתר היגר אל הרקות.
+    #
+    # שיער אמיתי מטפס על הקרקפת לפני שהוא נופל. כאן זה נאכף
+    # בחישוב: הראש מקורב לאליפסואיד (מדידה, לא הנחה), וכל נקודה
+    # שנכנסת פנימה נדחפת החוצה אל הקליפה. הקליפה **מתעבה**
+    # לאורך הגדיל, ולכן הגדילים נערמים בשכבות ויש נפח.
+    head_lo = mathutils.Vector((min(v.x for v in hv), min(v.y for v in hv),
+                                min(v.z for v in hv))) if hv else None
+    head_hi = mathutils.Vector((max(v.x for v in hv), max(v.y for v in hv),
+                                max(v.z for v in hv))) if hv else None
+    if head_lo is None:
+        return None
+    hc = (head_lo + head_hi) * 0.5
+    hr = mathutils.Vector((max(0.02, (head_hi.x - head_lo.x) * 0.5),
+                           max(0.02, (head_hi.y - head_lo.y) * 0.5),
+                           max(0.02, (head_hi.z - head_lo.z) * 0.5)))
+    neck_z = min(v.z for v in hv)
+
+    def _shell(p, shell):
+        """דוחף נקודה שבתוך קליפת הראש אל פני הקליפה."""
+        q = mathutils.Vector(((p.x - hc.x) / hr.x, (p.y - hc.y) / hr.y,
+                              (p.z - hc.z) / hr.z))
+        d = q.length
+        if d < 1e-6:
+            return p
+        want = 1.0 + shell
+        if d >= want:
+            return p
+        k = want / d
+        return mathutils.Vector((hc.x + q.x * k * hr.x,
+                                 hc.y + q.y * k * hr.y,
+                                 hc.z + q.z * k * hr.z))
+
+    # --- **קו שיער משלנו, ולא קבוצת ``scalp`` של החלקיקים.**
+    #
+    # זו הייתה הסיבה ל"כתר קירח" בשני פריימי המבחן: ב-
+    # ``build_groups`` הסף הוא ``lo = 0.908 + 0.082*front``,
+    # כלומר בחזית המלאה ``zr > 0.990`` - שזה z=1.683 על ראש
+    # שקודקודו 1.700. במילים אחרות **לכל חזית הגולגולת, שישה
+    # ס"מ מעל הגבות ועד הכתר, אין בכלל נקודות צמיחה**. במערכת
+    # החלקיקים זה לא נראה כי הנפח הכדורי של הבנים כיסה את
+    # האזור בדיעבד; עם גדילים מסורקים אחורה אין מה שיכסה אותו.
+    #
+    # כאן הסף נגזר **מקו הגבות שנמדד**: 1.6 ס"מ מעליו בחזית
+    # (מצח פנוי אמיתי) ויורד אל 0.908 מהגובה בעורף. הגדילים
+    # בחזית מסורקים כמעט אחורה לגמרי (ראה ``bk``), ולכן הם
+    # מכסים את הכתר בלי לרדת על הפנים.
+    z_back = h * 0.908
+    z_front = brow + 0.016
+    root_w = {}
+    for i, v in enumerate(vs):
+        if v.z / h < 0.860:
+            continue
+        fr = smoothstep(-0.020, 0.060, (v.y - cy) * fdir)
+        if v.z <= z_back + (z_front - z_back) * fr:
+            continue
+        # על הפנים עצמן לא צומח שיער, גם אם הן מעל הסף.
+        if (v.z < brow and (v.y - cy) * fdir > -FACE_BACK
+                and abs(v.x - head_x) < FACE_HALF):
+            continue
+        # אורך: מלא בעורף, 55% בחזית ובכתר. ``backness`` נמדד
+        # באותו אופן כמו ב-``build_groups`` כדי ששתי המערכות
+        # לא יתארו שתי תסרוקות שונות.
+        root_w[i] = 0.55 + 0.45 * (1.0 - fr)
+    # **ה-UV של כל שורש נאסף כאן ולא מחושב אחר כך.** ``Deform
+    # Curves on Surface`` מזהה לאן שורש שייך אך ורק דרך
+    # ``surface_uv_coordinate``; בלי התכונה הזו הוא לא עושה
+    # כלום (ולא נופל), כלומר השיער נשאר קפוא בזמן שהראש
+    # מסתובב - וזה בדיוק הפער שנמצא ב-14/10. חישוב בדיעבד עם
+    # ``closest_point_on_mesh`` הוא קירוב; כאן הפאה והמשקולות
+    # הברצנטריות כבר ידועים, ולכן ה-UV **מדויק**.
+    uvl = me.uv_layers.active
+    faces = []
+    for p in me.polygons:
+        idx = list(p.vertices)
+        if not all(i in root_w for i in idx):
+            continue
+        fuv = None
+        if uvl:
+            fuv = {me.loops[li].vertex_index: tuple(uvl.data[li].uv)
+                   for li in p.loop_indices}
+        faces.append((idx, fuv, p.area))
+    if not faces:
+        log("  שיער עקומות: אין פאות קרקפת שלמות - מבוטל")
+        return None
+    tot = sum(ar for _, _, ar in faces)
+    rng = __import__("random").Random(seed)
+
+    # **אורך, וזה המשתנה היחיד שמפריד "כדור" מ"תסרוקת".**
+    # ``hair_len`` של מערכת החלקיקים הוא 10.5 ס"מ, ושם זה היה
+    # נכון: שם הנפח נבנה מהבנים ומה-clump, וכל סנטימטר נוסף
+    # התנפח רדיאלית. גדיל עקומות מסורק הוא ההפך - הוא **נופל**,
+    # ואורך קצר הוא בדיוק מה שמייצר כדור: 10 ס"מ מראש ברדיוס 9
+    # אינם מספיקים כדי לעבור את קו הלסת, ולכן הם נעצרים כהילה.
+    # 26 ס"מ מגיעים לכתפיים, והכבידה המזויפת מיישרת אותם.
+    base_len = float(spec.get("hair_len_curves",
+                              spec.get("hair_len", 0.105) * 2.4))
+    comb_dn = float(spec.get("comb_down", 0.84))
+    comb_bk = float(spec.get("comb_back", 0.52))
+
+    pts, sizes = [], []
+    root_uv = []
+    guarded = 0
+    for idx, fuv, area in faces:
+        n_here = max(1, int(round(strands * area / tot)))
+        for _ in range(n_here):
+            # דגימה ברצנטרית על משולש אקראי מתוך מניפת הפאה.
+            k = rng.randrange(len(idx) - 2) if len(idx) > 3 else 0
+            a, b, c = idx[0], idx[k + 1], idx[k + 2]
+            u, w = rng.random(), rng.random()
+            if u + w > 1.0:
+                u, w = 1.0 - u, 1.0 - w
+            root = vs[a] * (1.0 - u - w) + vs[b] * u + vs[c] * w
+            nn = (nrm[a] * (1.0 - u - w) + nrm[b] * u + nrm[c] * w)
+            if nn.length < 1e-6:
+                continue
+            nn.normalize()
+            ln = (root_w.get(a, 0.0) * (1.0 - u - w)
+                  + root_w.get(b, 0.0) * u + root_w.get(c, 0.0) * w)
+            # **לא ``base_len * weight``.** משקל ``hairlen`` הוא
+            # כ-0.3 בממוצע, ולכן הכפל הישיר נתן גדילים של 3 ס"מ
+            # - וזה מה שנמדד בפריים המבחן הראשון: פלומה ולא
+            # שיער. המשקל כאן הוא **וריאציה סביב אורך הבסיס**
+            # (35%..100%), כלומר הוא קובע את קו התספורת ולא את
+            # עצם קיומה.
+            ln = base_len * (0.35 + 0.65 * min(1.0, max(0.0, ln))) \
+                * (0.84 + 0.32 * rng.random())
+            if ln < 0.006:
+                continue
+            # **כיוון המסרק תלוי במקום על הראש.** גדיל שיוצא
+            # בחזית הקרקפת ומסורק "למטה" יורד על המצח - זו
+            # הייתה התקלה. שם המסרק הוא כמעט אחורה בלבד.
+            fy_root = (root.y - cy) * fdir
+            front = smoothstep(-0.02, 0.055, fy_root)
+            dn = comb_dn * (1.0 - 0.45 * front)
+            bk = comb_bk + (0.95 - comb_bk) * front
+            # **הטיה הצידה לגדילים הקדמיים.** בלעדיה הגדיל
+            # שמעל הרקה נופל אנכית ישר לתוך עמוד הפנים, והחסם
+            # מעיף אותו הצידה בבת אחת - 16 אלף נקודות שקפצו
+            # יחד, וזה מה שנמדד בפריים כ"כנפיים" אופקיות.
+            # הטיה רציפה בכיוון הצמיחה פותרת את זה במקור.
+            side_r = 1.0 if root.x >= head_x else -1.0
+            comb = mathutils.Vector((side_r * 0.42 * front,
+                                     -fdir * bk, -dn))
+            if comb.length < 1e-6:
+                comb = mathutils.Vector((0.0, 0.0, -1.0))
+            comb.normalize()
+            # **הכבידה מנצחת את המסרק ככל שמתרחקים מהשורש.**
+            # בפריים המבחן השישי כל השיער נסרק אחורה-ומטה
+            # לאורך כל הגדיל, ולכן הוא נחת **מאחורי** הכתפיים
+            # ולא נראה כלל מהחזית - מה שקרא כ"כדור" סביב הראש.
+            # שיער אמיתי נסרק אחורה רק בסנטימטרים הראשונים,
+            # ומשם הוא נופל אנכית וממסגר את הפנים.
+            down = mathutils.Vector((0.0, 0.0, -1.0))
+            seg = ln / float(npts - 1)
+            p0 = root.copy()
+            strand = [p0.copy()]
+            for j in range(1, npts):
+                t = j / float(npts - 1)
+                # הכיפוף מצטבר: בתחילת הגדיל הנורמל שולט
+                # (השיער "עומד" ליד הקרקפת) ובקצה המסרק שולט.
+                # 0.34 ולא 0.65: ככל שהמעריך קטן יותר הגדיל
+                # עובר מהר יותר מ"יוצא מהקרקפת" ל"נופל", כלומר
+                # הכבידה המזויפת חזקה יותר. 0.65 השאיר אותו
+                # יוצא רדיאלית לאורך חצי מאורכו - וזה מה שנמדד
+                # בפריים כהילה.
+                cb = comb * (1.0 - t ** 0.55) + down * (t ** 0.55)
+                if cb.length < 1e-6:
+                    cb = down.copy()
+                cb.normalize()
+                d = nn * (1.0 - t ** 0.34) + cb * (t ** 0.34)
+                if d.length < 1e-6:
+                    d = comb.copy()
+                d.normalize()
+                p0 = p0 + d * seg
+                # הקליפה מתעבה מ-6 מ"מ בשורש ל-2.6 ס"מ בקצה,
+                # וזה הנפח של התסרוקת. מתחת לקו הצוואר הגדיל
+                # משוחרר ונופל חופשי - שם אין ראש להיצמד אליו.
+                # **הקליפה האליפסואידית בוטלה.** היא נבנתה
+                # מתיבת הראש, והתיבה **גדולה מהגולגולת** בכל
+                # מקום חוץ משש נקודות ההשקה - ולכן היא דחפה
+                # את השיער החוצה אל מעטפת שהיא עד 4 ס"מ מעל
+                # העור, כלומר ייצרה בדיוק את ההילה שהיא באה
+                # למנוע. ההצמדה עוברת ל-``Shrinkwrap Hair
+                # Curves`` של האולפן, שעובד מול **המש האמיתי**
+                # ורץ ב-C ולא בפייתון.
+                if p0.z > neck_z - 0.02 and USE_SHELL:
+                    p0 = _shell(p0, 0.030 + 0.055 * (t ** 0.8))
+                q = p0.copy()
+                # --- חסם הפנים, **כסיבוב סביב ציר הראש**.
+                # הזזה בציר Y בלבד הייתה דוחפת את הנקודה אל
+                # תוך הגולגולת, ואז ``Shrinkwrap`` היה מצמיד
+                # אותה בחזרה אל הפנים - כלומר שיער על האף.
+                # סיבוב סביב הציר האנכי שומר על המרחק מהציר,
+                # ולכן הגדיל עובר אל הרקה ונשאר **מחוץ** לראש.
+                if (q.z < brow and (q.y - cy) * fdir > -FACE_BACK
+                        and abs(q.x - head_x) < FACE_HALF):
+                    dx, dy = q.x - head_x, q.y - cy
+                    r = math.hypot(dx, dy)
+                    if r > 1e-5:
+                        side = 1.0 if dx >= 0.0 else -1.0
+                        # **ההזזה המינימלית, ולא קפיצה אל הרקה.**
+                        # הגרסה הקודמת שמרה על המרחק מציר הראש
+                        # והעבירה את הנקודה ל-90°, כלומר הזיזה
+                        # אותה 8-9 ס"מ הצידה - וכל נקודה כזאת
+                        # הפכה לגדיל אופקי. כאן הנקודה נדחפת רק
+                        # עד **קצה עמוד הפנים**, והעומק נשמר:
+                        # התוצאה היא קווצה שיורדת לצד הלחי, שזו
+                        # בדיוק התנהגות השיער הנכונה.
+                        q.x = head_x + side * FACE_HALF * 1.04
+                        guarded += 1
+                strand.append(q)
+            pts.extend(strand)
+            sizes.append(npts)
+            if fuv is not None:
+                ua, ub, uc = fuv[a], fuv[b], fuv[c]
+                bw = 1.0 - u - w
+                root_uv.append((ua[0] * bw + ub[0] * u + uc[0] * w,
+                                ua[1] * bw + ub[1] * u + uc[1] * w))
+    if not sizes:
+        log("  שיער עקומות: לא נוצר אף גדיל")
+        return None
+
+    cu = bpy.data.hair_curves.new("hairdata_" + body.name)
+    cu.add_curves(sizes)
+    flat = []
+    for p in pts:
+        flat.extend((p.x, p.y, p.z))
+    cu.points.foreach_set("position", flat)
+    cu.update_tag()
+    ob = bpy.data.objects.new("haircurves_" + body.name, cu)
+    bpy.context.scene.collection.objects.link(ob)
+    try:
+        cu.surface = body
+        if body.data.uv_layers:
+            cu.surface_uv_map = body.data.uv_layers[0].name
+    except Exception as e:                                   # noqa: BLE001
+        log("    (לא הוצמד משטח: %s)" % e)
+    cu.materials.append(hair_material("haircrv_" + body.name, col))
+
+    # --- **חיבור לשלד: ``Deform Curves on Surface``**
+    #
+    # עקומות שיער אינן נענות ל-``ARMATURE``. הן נענות למשטח
+    # שהן צומחות עליו, ובלבד ששני תנאים מתקיימים: לכל גדיל יש
+    # ``surface_uv_coordinate``, ועל האובייקט יושב הנוד
+    # שמתרגם את ה-UV הזה מהמשטח ב-rest אל המשטח ה**מוערך**
+    # (אחרי ה-ARMATURE של הגוף). הנוד הוא מובנה בבלנדר
+    # (``GeometryNodeDeformCurvesOnSurface``) ולכן אין כאן
+    # שום הורדה.
+    #
+    # **והוא ראשון בשרשרת, לא אחרון.** כל ה-grooming (קווצה,
+    # רעש, הצמדה) חייב לרוץ על הגדיל כבר במקומו המעוות -
+    # אחרת ה-Shrinkwrap מצמיד אל הגולגולת שב-rest ואז
+    # הדפורמציה מזיזה את הכול יחד, כלומר השיער נכנס לראש
+    # ברגע שהוא מסתובב.
+    deform_ok = False
+    if root_uv and len(root_uv) == len(sizes):
+        try:
+            at = cu.attributes.get("surface_uv_coordinate")
+            if at is None:
+                at = cu.attributes.new(
+                    "surface_uv_coordinate", "FLOAT2", "CURVE")
+            fuvs = []
+            for uu, vv in root_uv:
+                fuvs.extend((uu, vv))
+            at.data.foreach_set("vector", fuvs)
+            cu.update_tag()
+            # **והדגל הזה הוא כל ההבדל בין "המודיפייר קיים"
+            # לבין "השיער זז".** ``Deform Curves on Surface``
+            # משווה את המשטח ב-rest למשטח המעוות, והוא קורא
+            # את ה-rest מתוך תכונה בשם ``rest_position`` שה-
+            # depsgraph מוסיף **רק** כשהדגל דלוק. בלעדיו הנוד
+            # רץ, אינו נופל, ואינו מזיז דבר. נמדד: תזוזת שיער
+            # 0.00 מ"מ מול 70 מ"מ תזוזת ראש.
+            body.add_rest_position_attribute = True
+            _gn(ob, deform_curves_group(), "deform", {})
+            deform_ok = True
+        except Exception as e:                               # noqa: BLE001
+            log("    אזהרה: חיבור השיער לשלד נכשל (%s)" % e)
+    else:
+        log("    אזהרה: אין UV על הגוף - השיער לא יעקוב אחרי השלד "
+            "(%d שורשים, %d גדילים)" % (len(root_uv), len(sizes)))
+
+    # --- ה-grooming של האולפן
+    want = ("Hair Curves Noise", "Clump Hair Curves", "Frizz Hair Curves",
+            "Smooth Hair Curves", "Shrinkwrap Hair Curves",
+            "Set Hair Curve Profile")
+    ng = load_hair_nodes(want)
+    used = []
+    if "Clump Hair Curves" in ng:
+        # **קודם קווצות ואז רעש, ולא להפך.** קווצה היא מה
+        # שהופך ענן גדילים לתסרוקת: היא מושכת כל גדיל אל
+        # הגדיל-מוביל הקרוב. אם הרעש רץ לפניה הוא מפזר בדיוק
+        # את מה שהיא עומדת לאסוף, והתוצאה בפריים הייתה פלומה.
+        _gn(ob, ng["Clump Hair Curves"], "clump",
+            {"Input_9": 0.038, "Input_7": 0.80, "Input_6": 0.62,
+             "Input_10": 0.12, "Input_14": seed + 1, "Input_15": True})
+        used.append("Clump")
+    if "Hair Curves Noise" in ng:
+        # גל רך לאורך הגדיל. ``Scale`` גדול = גל ארוך.
+        _gn(ob, ng["Hair Curves Noise"], "noise",
+            {"Input_3": 0.16, "Input_2": 0.90, "Input_11": 0.075,
+             "Input_12": 1.0, "Input_13": 0.6, "Input_8": seed,
+             "Input_6": True})
+        used.append("Noise")
+    if "Frizz Hair Curves" in ng:
+        _gn(ob, ng["Frizz Hair Curves"], "frizz",
+            {"Input_3": 0.07, "Input_11": 0.0009, "Input_2": 0.92,
+             "Input_8": seed + 2, "Input_6": True})
+        used.append("Frizz")
+    if "Smooth Hair Curves" in ng:
+        _gn(ob, ng["Smooth Hair Curves"], "smooth",
+            {"Input_10": 0.75, "Input_3": 3, "Input_4": 0.6,
+             "Input_8": True})
+        used.append("Smooth")
+    if "Shrinkwrap Hair Curves" in ng:
+        # **אחרי** הרעש והפריז, כי הם אלה שיכולים לדחוף גדיל
+        # אל תוך הגולגולת. ``Lock Roots`` משאיר את השורש במקומו.
+        _gn(ob, ng["Shrinkwrap Hair Curves"], "shrink",
+            {"Input_2": body, "Input_5": 1.0, "Input_4": 0.004,
+             "Input_8": 0.007, "Input_6": 3, "Input_7": True})
+        used.append("Shrinkwrap")
+    if "Set Hair Curve Profile" in ng:
+        # 0.14 מ"מ ברדיוס. שערה אנושית היא 0.05-0.09 מ"מ ברדיוס,
+        # אבל כאן גדיל אחד מייצג כמה שערות (45 אלף גדילים מול
+        # 100 אלף שערות בראש), ולכן העיבוי הוא מה שמחזיר את
+        # **הכיסוי** - בלעדיו נראית הקרקפת מבעד לשיער.
+        _gn(ob, ng["Set Hair Curve Profile"], "profile",
+            {"Input_6": True, "Input_3": 0.00014, "Input_2": 0.35,
+             "Input_4": 1.0, "Input_5": 0.04})
+        used.append("Profile")
+
+    # --- המדידה שמחליפה את ההנחה
+    in_face = sum(1 for p in pts
+                  if p.z < brow and (p.y - cy) * fdir > -FACE_BACK
+                  and abs(p.x - head_x) < FACE_HALF)
+    log("  שיער עקומות (נכס אולפן): %d גדילים × %d נקודות · "
+        "קו גבות %.3f (%s) · %d נקודות סורקו אל הרקה · "
+        "בתיבת הפנים אחרי החסם: %d · grooming: %s · "
+        "חיבור לשלד: %s"
+        % (len(sizes), npts, brow, how, guarded, in_face,
+           ", ".join(used) or "אין",
+           "Deform Curves on Surface" if deform_ok else "אין"))
+    if in_face:
+        log("    אזהרה: %d נקודות שיער עדיין מול הפנים" % in_face)
+    return ob
+
+
 def hair_shell_material(name: str, col):
     """חומר לקליפת השיער: Principled אניזוטרופי, לא Hair BSDF.
 
@@ -3082,12 +3580,27 @@ def build(a):
     # ``denoising_prefilter=ACCURATE`` אינו קוסמטיקה: ברירת המחדל
     # מרככת פירוט בתדר גבוה - כלומר בדיוק את השיער - וזה מה
     # שנמדד ב-``sharp_detail``.
+    # **``use_fast_gi`` הוא בדיוק מה שמכבה את החזרות האור מהחול
+    # ומהים.** הוא מחליף את הקפיצות הרחוקות בקירוב AO, כלומר
+    # האור שעולה מהחול הבהיר אל התחתית של הדמות - ה"החזרה"
+    # שהופכת דמות שמוארת בשמש לדמות שעומדת **על** חוף - נחתך
+    # לכתם כהה אחיד. בבדיקה הוא חוסך זמן, בפריים הסופי הוא
+    # עולה את מה שמשלמים עליו. לכן הוא דגל, ובמצב סופי הוא כבוי
+    # וקפיצות ה-diffuse עולות.
+    fin = bool(getattr(a, "final_light", 1))
     _set(sc.cycles, device="CPU", samples=a.samples,
-         use_adaptive_sampling=True, adaptive_threshold=0.006,
+         use_adaptive_sampling=True,
+         adaptive_threshold=0.0035 if fin else 0.006,
          use_denoising=True, denoiser="OPENIMAGEDENOISE",
-         denoising_prefilter="ACCURATE", max_bounces=6,
-         transmission_bounces=3, caustics_reflective=False,
-         caustics_refractive=False, use_fast_gi=True)
+         denoising_prefilter="ACCURATE",
+         max_bounces=12 if fin else 6,
+         diffuse_bounces=6 if fin else 4,
+         glossy_bounces=6 if fin else 4,
+         transmission_bounces=8 if fin else 3,
+         transparent_max_bounces=8,
+         caustics_reflective=False,
+         caustics_refractive=False, use_fast_gi=not fin,
+         blur_glossy=0.6, sample_clamp_indirect=10.0)
     _set(sc.render, film_transparent=False, filter_size=1.20)
     _set(sc.render.image_settings, file_format="PNG", compression=15)
     sc.view_settings.view_transform = "AgX"
@@ -3103,6 +3616,18 @@ def build(a):
     # האופק ואת מרקם החול לתוך הטווח, והעור נשאר קריא כי
     # ה-AgX מגלגל את ההיילייטס ולא מצמיד אותם.
     sc.view_settings.exposure = -0.52
+    # **ניהול צבע מפורש, ולא "מה שהיה בקובץ".** הסצנה נבנית
+    # ב-``--factory-startup`` ולכן ברירות המחדל ידועות - אבל
+    # הן ידועות רק עד שגרסת בלנדר משתנה, וצבע שמשתנה בשקט בין
+    # ריצה לריצה הוא בדיוק מה שאי אפשר לאתר בדיעבד מתוך פריים.
+    # שלושת השדות נכתבים במפורש ונרשמים ביומן.
+    _set(sc.display_settings, display_device="sRGB")
+    _set(sc.sequencer_colorspace_settings, name="sRGB")
+    _set(sc.view_settings, use_curve_mapping=False, gamma=1.0)
+    log("ניהול צבע: display=%s view=%s look=%s exposure=%.2f gamma=%.2f"
+        % (sc.display_settings.display_device,
+           sc.view_settings.view_transform, sc.view_settings.look,
+           sc.view_settings.exposure, sc.view_settings.gamma))
     sc.render.resolution_x = a.width
     sc.render.resolution_y = a.height
     sc.render.resolution_percentage = 100
@@ -3202,7 +3727,13 @@ def build(a):
             clear_face_hair(body, eyes, h, fdir, groups)
         shape_chest(body, groups, fdir, s["chest"])
 
-        uvname = ensure_uv(body) if skinmaps else ""
+        # **UV תמיד, גם בלי מפות עור.** ה-UV אינו רק נשא של
+        # טקסטורה - הוא גם מה שמקשר כל שורש שיער למשטח
+        # (``surface_uv_coordinate``). בלעדיו ``Deform Curves on
+        # Surface`` אינו עושה כלום, והשיער נשאר קפוא כשהראש זז.
+        uvname = ensure_uv(body)
+        if not skinmaps:
+            uvname = ""
         skin = skin_material("skin_" + s["tag"], s["tone"], s["flush"],
                              maps=skinmaps if uvname else None,
                              uvname=uvname, tile=a.skin_tile,
@@ -3245,14 +3776,28 @@ def build(a):
         # בזמן שהוקצב. השיער חוזר לחלקיקים - עם ``hairlen``
         # ועם הקרקפת המורחבת אחורה, שתיהן נמדדו כעובדות -
         # ושם הפנים גלויות.
-        shell = None
-        if a.hair_shell:
+        shell = curves = None
+        if a.hair_asset:
+            # **נכס האולפן.** ראה ``hair_curves_asset``: שיער
+            # כ-Hair Curves עם ה-grooming הרשמי של Blender
+            # Studio, במקום מערכת חלקיקים שאי אפשר למדוד אותה
+            # לפני הרנדר.
+            hspec = dict(s.get("swim") or {})
+            hspec["hair_len"] = s["hair_len"]
+            hspec["comb_down"] = a.hair_comb
+            hspec["comb_back"] = a.hair_back
+            curves = hair_curves_asset(
+                body, eyes, h, fdir, groups, s["hair"], hspec,
+                strands=a.hair_strands)
+        if curves:
+            curves.name = "haircrv_" + s["tag"]
+        elif a.hair_shell:
             shell = hair_shell(body, h, fdir, s["hair"],
                                drop=s.get("hair_drop", 0.19),
                                thick=a.hair_thick, fuzz=a.hair_fuzz)
-        if shell:
-            shell.name = "hair_" + s["tag"]
-        else:
+            if shell:
+                shell.name = "hair_" + s["tag"]
+        if not curves and not shell:
             add_hair(body, s["hair_len"], s["hair"],
                      children=a.hair_children)
         sub = body.modifiers.new("sub", "SUBSURF")
@@ -3303,7 +3848,7 @@ def build(a):
                 g.add(list(range(len(e.data.vertices))), 1.0, "REPLACE")
                 em = e.modifiers.new("arm", "ARMATURE")
                 em.object = arm
-        for extra in (garment, shell, bikini, straps):
+        for extra in (garment, shell, bikini, straps, curves):
             if not extra:
                 continue
             extra.parent = root
@@ -3315,11 +3860,13 @@ def build(a):
         cast.append({"root": root, "arm": arm, "body": body,
                      "fdir": fdir,
                      "extras": [x for x in (garment, bikini, straps) if x],
+                     "curves": curves,
                      "x": s["x"], "y": s["y"], "yaw": s["yaw"],
                      "turn": s["turn"]})
         meta.append({"tag": s["tag"], "verts": len(body.data.vertices),
                      "rigged": bool(arm), "pose_sane": ok,
                      "hair_shell": bool(shell),
+                     "hair_curves": bool(curves),
                      "hair_verts": len(shell.data.vertices) if shell else 0,
                      "garment": bool(garment),
                      "sep_top": bool(bikini), "straps": bool(straps),
@@ -3357,17 +3904,24 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=540)
     ap.add_argument("--subdiv", type=int, default=2,
                     help="רמות חלוקה ברינדור. 2=חלק, 1=חצי זיכרון")
-    # **ברירת המחדל 0, וזו החלטה ולא ויתור.** הגאומטריה הנפרדת
-    # נבנית נכון לחלוטין - נמדד תשע פעמים: 968 פאות, תיבת עולם
-    # על החזה, 1.8 ס"מ מחוץ לעור, חומר תקין, גם כיריעה פתוחה
-    # וגם כנפח סגור - ובכל זאת אינה מרונדרת ב-Cycles, בעוד
-    # אובייקט שנבנה באותה שרשרת בדיוק (``make_top_straps``) כן.
-    # הסיבה לא נמצאה. עד שתימצא, הדלקת הדגל מחליפה עליון שמכסה
-    # את החזה בעליון שאינו קיים - כלומר רגרסיה. הקוד נשאר,
-    # הדגל כבוי, והרצועות מבוטלות איתו.
-    ap.add_argument("--sep-top", type=int, default=0, dest="sep_top",
-                    help="חלק עליון כגאומטריה נפרדת. נבנה נכון "
-                         "ואינו מרונדר - ראה ההערה ב-make_bikini_top")
+    # **ברירת המחדל 1, אחרי שנמדד בפריים שהיא כן מרונדרת.**
+    #
+    # ארבעה סבבים הסיקו "נבנית נכון ואינה מרונדרת" והשאירו את
+    # הדגל כבוי. ההסקה הייתה שגויה, והסיבה פשוטה: **הדגל לא
+    # הועבר מעולם**. ``studio3d.yml`` מריץ את הסקריפט בלי
+    # ``--sep-top``, ולכן כל פריים שנבדק הופק עם ברירת המחדל 0
+    # - כלומר בלי הגאומטריה הנפרדת בכלל. ה"רצועה" שנראתה
+    # בפריימים האלה היא ``make_garment`` ולא הגביעים.
+    # ``iso_top.py`` מרנדר את אותה גאומטריה בדיוק בבידוד,
+    # ושני המשולשים מופיעים. המסקנה: אין תקלת רנדר, יש דגל
+    # שלא הועבר - ומכאן ברירת המחדל דלוקה והדגל נוסף ל-yml.
+    ap.add_argument("--sep-top", type=int, default=1, dest="sep_top",
+                    help="חלק עליון כגאומטריה נפרדת (שני משולשים)")
+    ap.add_argument("--hair-asset", type=int, default=1, dest="hair_asset",
+                    help="שיער מנכסי האולפן של בלנדר (Hair Curves). "
+                         "0 = מערכת חלקיקים")
+    ap.add_argument("--hair-strands", type=int, default=45000,
+                    dest="hair_strands", help="מספר גדילי העקומות")
     ap.add_argument("--face-guard", type=int, default=1, dest="face_guard",
                     help="חסם שיער מול הפנים לפי מיקום העיניים")
     ap.add_argument("--hair-shell", type=int, default=0, dest="hair_shell",
@@ -3394,6 +3948,10 @@ def main() -> int:
     ap.add_argument("--skin-detail", type=float, default=0.62,
                     dest="skin_detail",
                     help="עוצמת שכבת הצילום על הבסיס, 0..1")
+    ap.add_argument("--final-light", type=int, default=1,
+                    dest="final_light",
+                    help="1 = מערך התאורה הסופי (GI מלא, בלי Fast GI, "
+                         "יותר קפיצות). 0 = מצב בדיקה מהיר")
     ap.add_argument("--inventory", action="store_true",
                     help="מדפיס מה יש בחבילה ויוצא, בלי לרנדר")
     a = ap.parse_args(argv)
