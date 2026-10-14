@@ -118,26 +118,66 @@ def check_top(img: np.ndarray, cloth_rgb, tol=0.16):
     ב-``measure_frame.py``).
     """
     h, w, _ = img.shape
-    y0, y1 = int(h * 0.26), int(h * 0.56)
     c = np.array(cloth_rgb, np.float32)
     res = []
     for half, (x0, x1) in enumerate(((0, w // 2), (w // 2, w))):
+        # **חלון החזה נגזר מגובה הדמות ולא מגובה הקאדר.**
+        # בריצה 38575137016 החלון הקבוע 0.26..0.56 תפס את
+        # **התחתון** - שהוא באמת שתי יחידות מרובעות - ואישר
+        # "שני גביעים" על פריים שבו העליון הוא רצועה אחת.
+        # 22%..40% מגובה הדמות הוא קו החזה; זה נמדד על הפריים.
+        col = subject_mask(img[:, x0:x1])
+        ys = np.nonzero(col.any(axis=1))[0]
+        if len(ys) > 10:
+            top, bot = int(ys.min()), int(ys.max())
+            span = bot - top
+            y0 = top + int(span * 0.22)
+            y1 = top + int(span * 0.40)
+        else:
+            y0, y1 = int(h * 0.26), int(h * 0.40)
         sub = img[y0:y1, x0:x1]
-        m = cloth_mask(sub)
+        # **רק בתוך גוף הדמות.** בלי ההגבלה הזו הים - שהוא
+        # כחול ורווי - נספר כ"בד", ובריצה 38575137016 הוא
+        # החזיר אי של 11,929 פיקסל שהוכרז "לא שני גביעים".
+        # התוצאה הייתה נכונה והסיבה שגויה, וזה בדיוק המצב
+        # שבו שער מאבד את ערכו.
+        skin = subject_mask(sub)
+        if skin.any():
+            ys, xs = np.nonzero(skin)
+            bx0, bx1 = int(xs.min()), int(xs.max()) + 1
+            by0, by1 = int(ys.min()), int(ys.max()) + 1
+            body_box = np.zeros(skin.shape, bool)
+            body_box[by0:by1, bx0:bx1] = True
+        else:
+            body_box = np.ones(sub.shape[:2], bool)
+        m = cloth_mask(sub) & body_box
         isl = islands(m, min_px=max(8, int(m.size / 1500)))
         # שני האיים הגדולים חייבים להיות דומים בשטח ומופרדים
         # אופקית - שני גביעים, ולא גביע ועוד כתם רעש.
         ok = False
         gap = 0
+        shapes = []
         if len(isl) >= 2:
             a0, b0 = isl[0], isl[1]
             ratio = b0[0] / max(1, a0[0])
             gap = b0[1][0] - a0[1][2] if b0[1][0] > a0[1][2] \
                 else a0[1][0] - b0[1][2]
-            ok = ratio >= 0.35 and gap >= 1
+            # **צורה, ולא רק "שניים".** רצועה שנחתכת באמצע
+            # נותנת גם היא שני איים, ובריצה 38575137016 היא
+            # עברה כך את התנאי - בעוד שבפריים רואים בבירור
+            # רצועה אחת. גביע הוא מקטע כמעט מרובע; קטע של
+            # רצועה הוא רחב ושטוח. היחס גובה/רוחב מפריד
+            # ביניהם חד-משמעית.
+            for n, (xa, ya, xb, yb) in (a0, b0):
+                ww = max(1, xb - xa + 1)
+                hh = max(1, yb - ya + 1)
+                shapes.append(round(hh / ww, 3))
+            ok = (ratio >= 0.35 and gap >= 1
+                  and all(s >= 0.45 for s in shapes))
         res.append({"half": half, "islands": len(isl),
                     "areas": [i[0] for i in isl[:3]],
-                    "gap_px": int(gap), "two_cups": bool(ok)})
+                    "gap_px": int(gap), "aspect_hw": shapes,
+                    "two_cups": bool(ok)})
     return {"name": "עליון בשני משולשים נפרדים",
             "pass": all(r["two_cups"] for r in res),
             "detail": res}
@@ -148,12 +188,47 @@ def check_top(img: np.ndarray, cloth_rgb, tol=0.16):
 FACE_RX = re.compile(r"בתיבת הפנים אחרי החסם:\s*(\d+)")
 
 
-def check_face_hair(logtext: str):
+def check_face_hair(logtext: str, img=None, min_skin=0.28):
+    """שני מדדים, ושניהם נחוצים - וזה הלקח של 14/10.
+
+    הגאומטרי (מהיומן) סופר **נקודות גדיל** בתיבת הפנים, והוא
+    החזיר 0 בשש מדידות רצופות בזמן שבפריים הפנים מכוסות
+    לחלוטין: ``Set Hair Curve Profile`` מעבה כל גדיל אחרי
+    הספירה, והקווצות נפרשות לכדור שעוטף את הראש. כלומר
+    "אפס שורשים מול הפנים" אינו "רואים פנים".
+
+    לכן נוסף מדד **פיקסלי**: באזור הפנים חייב להיות שיעור
+    מינימלי של פיקסלי עור. זה המדד שמסכים עם העין.
+    """
     hits = [int(m) for m in FACE_RX.findall(logtext)]
-    return {"name": "אפס גדילי שיער בתיבת הפנים",
-            "pass": bool(hits) and all(v == 0 for v in hits),
-            "detail": {"measured_per_character": hits,
-                       "characters": len(hits)}}
+    geo_ok = bool(hits) and all(v == 0 for v in hits)
+    det = {"measured_per_character": hits, "characters": len(hits)}
+    pix_ok = True
+    if img is not None:
+        h, w, _ = img.shape
+        fr = []
+        for x0, x1 in ((0, w // 2), (w // 2, w)):
+            col = subject_mask(img[:, x0:x1])
+            ys = np.nonzero(col.any(axis=1))[0]
+            if len(ys) < 10:
+                continue
+            top, bot = int(ys.min()), int(ys.max())
+            span = bot - top
+            # אזור הפנים: 3%..11% מגובה הדמות, שליש מרכזי ברוחב.
+            fy0, fy1 = top + int(span * 0.03), top + int(span * 0.11)
+            xs = np.nonzero(col.any(axis=0))[0]
+            cx0, cx1 = int(xs.min()), int(xs.max())
+            cw = cx1 - cx0
+            fx0 = cx0 + int(cw * 0.30)
+            fx1 = cx0 + int(cw * 0.70)
+            box = subject_mask(img[fy0:fy1, x0 + fx0:x0 + fx1])
+            fr.append(round(float(box.mean()), 4))
+        det["face_skin_fraction"] = fr
+        det["min_required"] = min_skin
+        pix_ok = bool(fr) and all(v >= min_skin for v in fr)
+    return {"name": "אפס שיער על הפנים (גאומטרי + פיקסלי)",
+            "pass": bool(geo_ok and pix_ok),
+            "detail": det}
 
 
 # ------------------------------------------------------- 3. ים וחול
@@ -284,7 +359,7 @@ def main() -> int:
     if "top" not in skip:
         checks.append(check_top(first, cloth))
     if "hair" not in skip:
-        checks.append(check_face_hair(logtext))
+        checks.append(check_face_hair(logtext, first))
     if "sea" not in skip:
         checks.append(check_sea_sand(first))
     if "motion" not in skip:
