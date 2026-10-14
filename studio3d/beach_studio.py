@@ -1619,7 +1619,22 @@ def _stick_to_body(co, body, offset):
         return v
     if not ok:
         return v
-    return loc + nrm * offset
+    # **הכיוון החוצה נמדד, ולא נלקח מהנורמל.** הגרסה הקודמת
+    # השתמשה ב-``nrm`` של הפאה שנפגעה, והגביעים נבלעו בגוף:
+    # היומן דיווח 968 פאות בתיבה הנכונה בדיוק (zr 0.648..0.699,
+    # כלומר על השד) ובפריים לא הופיע דבר. נורמל של פאה בודדת
+    # בקמט של הרשת יכול להצביע פנימה, ואז ההזזה דוחפת את הבד
+    # אל מתחת לעור במקום מעליו - תקלה שאין לה שום סימן ביומן.
+    # הווקטור מהמשטח אל הנקודה המקורית הוא **מדידה**: כל
+    # הנקודות נבנות במישור שלפני החזה, ולכן הוא תמיד מצביע
+    # החוצה. הנורמל נשאר רק כנסיגה כשהנקודה יושבת על המשטח.
+    out = v - loc
+    if out.length < 1e-5:
+        out = nrm.copy()
+    out.normalize()
+    if out.dot(nrm) < 0.0:
+        out = nrm.copy()
+    return loc + out * offset
 
 
 def make_bikini_top(body, h, fdir, mat, spec, name="top"):
@@ -1766,12 +1781,27 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     # קודקודים אינם פאות, ומש בלי פאות אינו מרונדר. מכאן ואילך
     # היומן אומר גם כמה פאות שרדו ואיפה הגביע יושב בפועל.
     lo, hi = bbox_of(ob)
+    # **מדידה של מה שבאמת קובע אם הבגד ייראה: המרחק מהעור.**
+    # שני סבבים דיווחו גאומטריה תקינה במקום הנכון בעוד הפריים
+    # היה ריק, כי "קודקוד קיים" ו"קודקוד **מחוץ** לגוף" הם שני
+    # דברים שונים ורק השני מרונדר. כאן זה נמדד ולא מונח.
+    out = []
+    for v in ob.data.vertices:
+        ok, loca, nrm, _ = body.closest_point_on_mesh(v.co)
+        if ok:
+            out.append((v.co - loca).dot(nrm))
+    worst = min(out) if out else 0.0
     log("  עליון %s: 2 גביעים, %d קודקודים / %d פאות · חצי-מרחק %.3f "
-        "רוחב %.3f · תיבה x %.3f..%.3f z %.3f..%.3f (zr %.3f..%.3f)"
+        "רוחב %.3f · תיבה x %.3f..%.3f y %.3f..%.3f z %.3f..%.3f "
+        "(zr %.3f..%.3f) · מרחק מהעור %.4f..%.4f"
         % (name, len(ob.data.vertices), len(ob.data.polygons), half, cw,
-           lo.x, hi.x, lo.z, hi.z, lo.z / h, hi.z / h))
+           lo.x, hi.x, lo.y, hi.y, lo.z, hi.z, lo.z / h, hi.z / h,
+           worst, max(out) if out else 0.0))
     if not len(ob.data.polygons):
         log("    אזהרה: אין פאות - הגביע לא יופיע בפריים")
+    if worst < 0.0:
+        log("    אזהרה: %d קודקודים **מתחת לעור** - ייבלעו בפריים"
+            % sum(1 for d in out if d < 0.0))
     return ob
 
 
