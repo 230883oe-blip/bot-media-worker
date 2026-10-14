@@ -339,7 +339,8 @@ def measure(maps: dict[str, np.ndarray]) -> dict:
     }
 
 
-def produce(out: Path, size: int = 2048, cache: Path | None = None) -> dict:
+def produce(out: Path, size: int = 2048, cache: Path | None = None,
+            chroma_gain: float = 2.6) -> dict:
     """הצינור המלא. מחזיר דוח; ``ok=False`` = נפילה רכה לפרוצדורלי."""
     cache = cache or (out / "_src")
     for src in SOURCES:
@@ -347,12 +348,12 @@ def produce(out: Path, size: int = 2048, cache: Path | None = None) -> dict:
         if not p:
             continue
         try:
-            maps = build_maps(p, size)
+            maps = build_maps(p, size, chroma_gain=chroma_gain)
         except Exception as e:                               # noqa: BLE001
             log("עיבוד נכשל (%s): %s" % (src["name"], e))
             continue
         rep = {"ok": True, "source": src["name"], "license": src["license"],
-               "page": src["page"], "size": size,
+               "page": src["page"], "size": size, "chroma_gain": chroma_gain,
                "files": save_set(maps, out), "metrics": measure(maps)}
         (out / "skin_source.json").write_text(
             json.dumps(rep, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -367,9 +368,15 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--size", type=int, default=2048)
     ap.add_argument("--cache", default=None)
+    # הגבר הכרומה. ברירת המחדל 2.6 נתנה ``chroma_std`` של 10.5
+    # על המפה, ובפריים המרונדר זה לא הזיז את המדד בכלל (נמדד,
+    # ריצה 38526001823). ההגבר הוא היחיד שמשפיע ישירות על
+    # הפסיפס, ולכן הוא יוצא לשורת הפקודה ולא נשאר קבוע בקוד.
+    ap.add_argument("--chroma", type=float, default=2.6)
     a = ap.parse_args(argv)
     rep = produce(Path(a.out), a.size,
-                  Path(a.cache) if a.cache else None)
+                  Path(a.cache) if a.cache else None,
+                  chroma_gain=a.chroma)
     print(json.dumps(rep, ensure_ascii=False, indent=1))
     return 0 if rep.get("ok") else 1
 
