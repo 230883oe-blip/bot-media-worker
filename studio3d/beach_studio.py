@@ -1312,8 +1312,8 @@ def sand_material():
     # --- 5. הזרקת רוויה, נגד AgX.
     hs = nt.nodes.new("ShaderNodeHueSaturation")
     hs.location = (-380, -60)
-    hs.inputs["Saturation"].default_value = 0.92
-    hs.inputs["Value"].default_value = 1.03
+    hs.inputs["Saturation"].default_value = 1.34
+    hs.inputs["Value"].default_value = 1.00
     nt.links.new(w_mix.outputs["Color"], hs.inputs["Color"])
     nt.links.new(hs.outputs["Color"], b.inputs["Base Color"])
 
