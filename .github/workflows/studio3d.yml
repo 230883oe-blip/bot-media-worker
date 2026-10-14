@@ -59,6 +59,11 @@ env:
   # כלומר צפיפות הטקסל ממילא גבוהה בהרבה מצפיפות הפיקסל ב-960
   # רוחב; 2048 שילם זיכרון ולא פירוט. נמדד בריצה 38523912537.
   MAPSZ: '1024'
+  # רמת חלוקה 1 ולא 2. עם מפת UV על הגוף, ``use_limit_surface``
+  # צריך להעריך את משטח הגבול **בנפרד לכל תפר UV**, וזה מה
+  # שהרג את הריצה 38525372548 (10.6GB בלי מפות, מוות איתן).
+  # ברמה 1 הגוף הוא 42 אלף פאות - חלק דיו ב-960 רוחב.
+  SUBDIV: '1'
   HBM: 'https://download.blender.org/demo/bundles/bundles-3.6/human-base-meshes-bundle-v1.0.0.zip'
 
 jobs:
@@ -144,7 +149,7 @@ jobs:
             ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
               --bundle hbm/human_base_meshes_bundle.blend \
               --hdri hdri/beach.hdr --out artifacts/smoke \
-              --skin skin \
+              --skin skin --subdiv ${SUBDIV} \
               --start $F --end $F --total ${TOTAL} \
               --samples 24 --width 480 --height 270
           done
@@ -223,7 +228,7 @@ jobs:
           ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
             --bundle hbm/human_base_meshes_bundle.blend \
             --hdri hdri/beach.hdr --out artifacts/frames \
-            --skin skin \
+            --skin skin --subdiv ${SUBDIV} \
             --start $S --end $E --total ${TOTAL} \
             --samples ${{ inputs.samples }} \
             --width ${{ inputs.width }} --height ${{ inputs.height }}
