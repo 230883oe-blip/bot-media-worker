@@ -240,6 +240,9 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
     scalp, chest, swim, crop, hairlen = {}, {}, {}, {}, {}
     hits = {"cup": 0, "band": 0, "strap": 0, "low": 0}
     sw = swimcut or {}
+    # כשהעליון נבנה כגאומטריה נפרדת (``make_bikini_top``), שלושת
+    # תת-הכללים שלו כאן מדולגים - אחרת מרונדרים שני עליונים.
+    sep_top = bool(sw.get("sep_top"))
     cut_tz = float(sw.get("top_z", 0.737))     # מרכז העליון (יחס גובה)
     cut_tw = float(sw.get("top_w", 0.049))     # חצי-רוחב העליון
     cut_wave = float(sw.get("top_wave", 0.017))  # עומק העקומה בעליון
@@ -416,7 +419,13 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         cup_z = cut_tz - 0.065
         cxx, cw = 0.075, 0.078
         t_cup = 1.0 - min(1.0, abs(bx - cxx) / cw)
-        if torso and fwd > 0.02 and bx > 0.026 and t_cup > 0.0:
+        if sep_top:
+            # **העליון נבנה כגאומטריה נפרדת ולכן אסור שייגזר גם
+            # כאן.** בלי הדילוג הזה שני העליונים מרונדרים זה על
+            # גבי זה, והישן - שהוא רצועה - מסתיר את החדש. בפריים
+            # זה נראה כאילו הגיאומטריה החדשה "לא עבדה".
+            pass
+        elif torso and fwd > 0.02 and bx > 0.026 and t_cup > 0.0:
             # ``**0.95`` ולא ``**0.45`` בקצה העליון: עם 0.45
             # הקצה העליון כמעט אינו יורד לצדדים, כלומר הצורה
             # היא מלבן עם פינות - וזו רצועה. חזקה קרובה ל-1
@@ -433,7 +442,8 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         # הרצועה יורדת יחד עם הגביע (``cup_z + 0.040``), אחרת היא
         # מרחפת 6 ס"מ מעליו ונקראת כחגורה נפרדת - וזו בדיוק
         # הרצועה שנראתה בפריים.
-        if torso and fwd < 0.30 and abs(zj - (cup_z + 0.040)) < 0.0135:
+        if (not sep_top) and torso and fwd < 0.30 and \
+                abs(zj - (cup_z + 0.040)) < 0.0135:
             swim[i] = 1.0
             hits["band"] += 1
         # רצועות צוואר: מקצה הגביע כלפי מעלה ופנימה. בלעדיהן
@@ -442,7 +452,8 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         # מוחק פאה שאחד מקודקודיה אינו בקבוצה, ועל רשת של
         # ~1.3 ס"מ רצועה צרה מזה מתפרקת לקודקודים בלי פאות -
         # כלומר נעלמת בשקט.
-        if torso and cup_z + 0.046 < zr < 0.862 and fwd > -0.10:
+        if (not sep_top) and torso and cup_z + 0.046 < zr < 0.862 and \
+                fwd > -0.10:
             tt_s = (zr - cup_z - 0.046) / (0.862 - cup_z - 0.046)
             # הרצועה מתחילה מעל קצה הגביע (``+0.020``) ולא בגובהו:
             # אחרת היא מתמזגת איתו ומרחיבה אותו כלפי מעלה, וזה
@@ -1636,14 +1647,26 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     hv = [v for v in vs if v.z / h > 0.880]
     cy = sum(v.y for v in hv) / max(1, len(hv)) if hv else 0.0
     cup_z = float(spec.get("top_z", 0.737)) - 0.065
-    zlo, zhi = (cup_z - 0.075) * h, (cup_z + 0.070) * h
+    # **הגובה אינו נמדד, והרוחב כן - וזו הפרדה שנלמדה בכאב.**
+    # הגרסה הראשונה חיפשה את הקודקוד הקדמי ביותר בטווח גובה של
+    # 14.5 ס"מ, וקיבלה את **החזה העליון/הבריח** - שם הגוף בולט
+    # קדימה יותר מהשד בדמות רזה. התוצאה בפריים הייתה שתי קשתות
+    # דקות מתחת לעצמות הבריח. ``cup_z`` לעומת זאת כבר **נמדד
+    # מהפריים** בסבב הקודם (``measure_frame.py``: פסגת החזה
+    # ב-0.679 ותחתיתו ב-0.638 מגובה הגוף), ולכן אין שום סיבה
+    # לנחש אותו מחדש מהרשת. הרוחב - המרחק בין הפטמות - כן נמדד,
+    # כי הוא תלוי בפיסול החזה שרץ רגע קודם.
+    zc = cup_z * h
+    zlo, zhi = zc - 0.030, zc + 0.030
     apex = {}
     for sgn, key in ((-1.0, "L"), (1.0, "R")):
         best = None
         for v in vs:
             if not (zlo < v.z < zhi):
                 continue
-            if sgn * v.x <= 0.012 or abs(v.x) > 0.22:
+            # 13 ס"מ ולא 22: מעבר לזה מתחיל השריר הדלתאי וראש
+            # הזרוע, והם קדמיים יותר מהשד.
+            if sgn * v.x <= 0.020 or abs(v.x) > 0.130:
                 continue
             fy = (v.y - cy) * fdir
             if best is None or fy > best[0]:
@@ -1653,6 +1676,8 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     if len(apex) < 2:
         log("  עליון %s: לא נמדדו שני שדיים - מבוטל" % name)
         return None
+    for k in apex:
+        apex[k].z = zc
     half = abs(apex["L"].x - apex["R"].x) * 0.5
     # רוחב חצי-גביע: 74% מהמרחק בין הפטמות. יותר מזה ושני
     # המשולשים נוגעים בעצם החזה ומתמזגים חזרה לרצועה אחת -
@@ -1797,6 +1822,47 @@ def make_top_straps(body, h, fdir, mat, spec, name="straps"):
     return ob
 
 
+def _brow_z(body, eyes, h):
+    """גובה קו הגבות, **נמדד, עם שער שפיות ונסיגה שאינה הנחה**.
+
+    הגרסה הראשונה סכמה את קודקודי העיניים וקיבלה ``z=0.019``,
+    כלומר 1.1% מגובה הגוף - ואז החסם ביטל **אפס** נקודות צמיחה
+    ודיווח הצלחה. זה הסוג הגרוע ביותר של באג: הפונקציה רצה,
+    כתבה שורה ליומן, ולא עשתה דבר. לכן יש כאן שער: מדידה שאינה
+    נופלת בטווח האנטומי האפשרי **נפסלת**, ולא משמשת.
+
+    הנסיגה אינה "0.95 מגובה הגוף" אלא מדידה אחרת מאותה רשת:
+    הצוואר הוא החתך האופקי **הצר ביותר** בין 80% ל-94% מהגובה,
+    ומעליו הראש. קו הגבות יושב בכ-60% מגובה הראש. זה נגזר
+    מהגולגולת של הדמות הזו ולא מטבלה אנתרופומטרית, ולכן הוא
+    נכון גם כששתי הדמויות בקנה מידה שונה - וזה בדיוק מה שהפיל
+    את ארבעת הסבבים הקודמים.
+    """
+    if eyes:
+        zs = [(e.matrix_world @ v.co).z
+              for e in eyes for v in e.data.vertices]
+        if zs:
+            z = sum(zs) / len(zs)
+            if 0.84 * h < z < 0.99 * h:
+                return z + 0.021, "עיניים (z=%.3f)" % z
+            log("    מדידת העיניים נפסלה: z=%.3f מחוץ לטווח" % z)
+    vs = vlist(body)
+    ztop = max(v.z for v in vs)
+    best = None
+    z = 0.80 * h
+    while z < 0.94 * h:
+        wide = [abs(v.x) for v in vs
+                if z <= v.z < z + 0.010 and abs(v.x) < 0.15]
+        if wide:
+            w = max(wide)
+            if best is None or w < best[0]:
+                best = (w, z)
+        z += 0.010
+    zneck = best[1] if best else 0.86 * h
+    return zneck + 0.60 * (ztop - zneck), \
+        "גולגולת (צוואר z=%.3f, קודקוד z=%.3f)" % (zneck, ztop)
+
+
 def clear_face_hair(body, eyes, h, fdir, groups):
     """**חסם פנים מוחלט לשיער, לפי מיקום העיניים שנמדד.**
 
@@ -1817,23 +1883,11 @@ def clear_face_hair(body, eyes, h, fdir, groups):
        לו עוד כסנטימטר לכל כיוון. גבול חד בצפיפות אינו גבול
        חד בפריים.
     """
-    ec, n = mathutils.Vector((0.0, 0.0, 0.0)), 0
-    for e in eyes or []:
-        for v in e.data.vertices:
-            ec += v.co
-            n += 1
     vs = vlist(body)
     hv = [v for v in vs if v.z / h > 0.880]
     cy = sum(v.y for v in hv) / max(1, len(hv)) if hv else 0.0
-    if n:
-        ec /= n
-        eye_z = ec.z
-    else:
-        # נסיגה: בלי עיניים, קו הגבות ב-95% מגובה הגוף. מדווח,
-        # כי זו בדיוק ההנחה שהפונקציה הזו נועדה להחליף.
-        eye_z = 0.950 * h
-        log("    אזהרה: אין עיניים - קו הגבות מונח ולא נמדד")
-    brow = eye_z + 0.021          # קו הגבות: 2.1 ס"מ מעל מרכז העין
+    brow, how = _brow_z(body, eyes, h)
+    log("    קו גבות לפי %s" % how)
     guard = brow + 0.035          # רצועת מעבר שבה האורך יורד ל-0
     scalp = dict(groups.get("scalp") or {})
     hairlen = dict(groups.get("hairlen") or {})
@@ -2051,7 +2105,13 @@ def sand_grid(name="sand", loc=(0.0, -46.0, 0.0)):
     # ס"מ שהגריד הישן לא יכול היה לשאת בכלל.
     specs = (
         ("sand_dunes", "CLOUDS", 6.50, 0.115, 4),
-        ("sand_ripples", "WOOD", 0.62, 0.058, 0),
+        # **שתי שכבות אדווה ולא אחת, ובטורבולנציה גבוהה.** בפריים
+        # הראשון עם הגריד הצפוף האדוות אכן הופיעו - וקראו כקורדורוי:
+        # פסים מקבילים מושלמים. אדווה אמיתית מתפתלת ומתפצלת, וזה
+        # בדיוק מה ש-``turbulence`` עושה. שכבה שנייה בקנה מידה אחר
+        # שוברת את המחזוריות שנותרה.
+        ("sand_ripples", "WOOD", 0.62, 0.042, 0),
+        ("sand_ripples2", "WOOD", 0.27, 0.019, 0),
         ("sand_micro", "CLOUDS", 0.115, 0.0085, 2),
     )
     for nm, kind, sc, st, depth in specs:
@@ -2062,7 +2122,7 @@ def sand_grid(name="sand", loc=(0.0, -46.0, 0.0)):
         else:
             tex.noise_basis_2 = "SIN"
             tex.wood_type = "BANDNOISE"
-            tex.turbulence = 1.8
+            tex.turbulence = 4.6
         d = ob.modifiers.new(nm, "DISPLACE")
         d.texture = tex
         d.texture_coords = "GLOBAL"
@@ -2985,7 +3045,9 @@ def build(a):
             e.name = "eye%d_%s" % (i, s["tag"])
         h = normalize(body, eyes)
         fdir = face_dir(body, eyes)
-        groups = build_groups(body, h, fdir, s.get("swim") or {})
+        swimspec = dict(s.get("swim") or {})
+        swimspec["sep_top"] = bool(a.sep_top and s["garment"] == "swim")
+        groups = build_groups(body, h, fdir, swimspec)
         # **חסם הפנים, לפי העיניים שנמדדו ולא לפי יחס גובה מונח.**
         # ראה ``clear_face_hair``.
         if a.face_guard:
@@ -3057,11 +3119,9 @@ def build(a):
         # ולכן ארבעה סבבים החזירו רצועה. ראה ``make_bikini_top``.
         top = bikini = straps = None
         if a.sep_top and s["garment"] == "swim":
-            bikini = make_bikini_top(body, h, fdir, cmat,
-                                     s.get("swim") or {},
+            bikini = make_bikini_top(body, h, fdir, cmat, swimspec,
                                      name="top_" + s["tag"])
-            straps = make_top_straps(body, h, fdir, cmat,
-                                     s.get("swim") or {},
+            straps = make_top_straps(body, h, fdir, cmat, swimspec,
                                      name="straps_" + s["tag"])
         del top
 
