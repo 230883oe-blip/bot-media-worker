@@ -545,8 +545,15 @@ def ensure_uv(ob) -> str:
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")
         try:
-            bpy.ops.uv.smart_project(angle_limit=math.radians(66.0),
-                                     island_margin=0.02)
+            # **89° ולא 66°, וזו החלטת זיכרון.** כל אי UV הוא
+            # תפר, וכל תפר מכריח את ה-SUBSURF להעריך את משטח
+            # הגבול בנפרד. ב-66° הפירוק נתן מאות איים, והסצנה
+            # נהרגה בסנכרון Cycles (נמדד, ריצה 38525372548:
+            # 10.6GB בלי מפות מול מוות עם מפות). זווית גדולה
+            # נותנת פחות איים ומתיחה רבה יותר - ועל מרקם מיקרו
+            # שחוזר 18 פעמים, מתיחה אינה נראית.
+            bpy.ops.uv.smart_project(angle_limit=math.radians(89.0),
+                                     island_margin=0.012)
         except TypeError:
             bpy.ops.uv.smart_project(island_margin=0.02)
         bpy.ops.object.mode_set(mode="OBJECT")
