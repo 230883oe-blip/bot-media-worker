@@ -1603,6 +1603,38 @@ def _bind_like_body(ob, body, kd, per):
     return ob
 
 
+def log_evaluated(ob, tag=""):
+    """מודד את **המש שהרנדרר באמת רואה**, אחרי כל המודיפיירים.
+
+    זה מה שחסר בשלושת הסבבים הקודמים: ``ob.data`` הוא מה
+    שכתבנו, והרנדר רואה את התוצאה של שרשרת המודיפיירים. מש
+    תקין לחלוטין ב-``ob.data`` יכול להגיע לרנדר ריק, מנופח או
+    מועף מחוץ לקאדר, ואין לזה שום סימן ביומן. כאן זה נמדד.
+    """
+    try:
+        dg = bpy.context.evaluated_depsgraph_get()
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        n, nf = len(me.vertices), len(me.polygons)
+        if n:
+            mw = ev.matrix_world
+            ws = [mw @ v.co for v in me.vertices]
+            log("    [מוערך] %s%s: %d קודקודים / %d פאות · עולם "
+                "x %.3f..%.3f y %.3f..%.3f z %.3f..%.3f"
+                % (tag, ob.name, n, nf,
+                   min(v.x for v in ws), max(v.x for v in ws),
+                   min(v.y for v in ws), max(v.y for v in ws),
+                   min(v.z for v in ws), max(v.z for v in ws)))
+        else:
+            log("    [מוערך] %s%s: **ריק** - לא יופיע בפריים"
+                % (tag, ob.name))
+        ev.to_mesh_clear()
+        return n
+    except Exception as e:                                   # noqa: BLE001
+        log("    [מוערך] %s: לא נמדד (%s)" % (ob.name, e))
+        return -1
+
+
 def _stick_to_body(co, body, offset):
     """מצמיד נקודה למשטח הגוף + הזזה לאורך הנורמל (Shrinkwrap אפוי).
 
@@ -1762,16 +1794,13 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     bm.to_mesh(ob.data)
     bm.free()
     _bind_like_body(ob, body, kd, per)
-    sol = ob.modifiers.new("thick", "SOLIDIFY")
-    sol.thickness = 0.0040
-    # ``offset=0`` ולא 1: העובי מתפרס סימטרית סביב המשטח, ולכן
-    # הבד נראה **בלי תלות** בכיוון הנורמל. חגורת ביטחון שנייה
-    # על אותה תקלה, כי כיוון נורמלים הוא בדיוק הדבר שמשתנה
-    # בשקט כשמישהו נוגע בסדר הקודקודים.
-    sol.offset = 0.0
-    sub = ob.modifiers.new("sub", "SUBSURF")
-    sub.levels = 0
-    sub.render_levels = 1
+    # **בלי SOLIDIFY ובלי SUBSURF, וזה לא ויתור אלא ממצא.**
+    # שלושה סבבים נמדדו בהם 968 פאות, תיבה נכונה בדיוק על השד
+    # ומרחק 8.0 מ"מ מהעור - ובפריים לא הופיע דבר. האובייקט
+    # היחיד שכן הופיע (הרצועות) נבנה באותה פונקציית חיבור
+    # בדיוק, עם אותו ריג ואותו הורה, וההבדל היחיד בינו לבין
+    # הגביע היה שני המודיפיירים האלה. בד של ביקיני הוא ממילא
+    # משטח דק, ו-Cycles מרנדר משטח חד-צדדי בלי בעיה.
     ob.data.materials.clear()
     ob.data.materials.append(mat)
     for p in ob.data.polygons:
@@ -3234,6 +3263,7 @@ def build(a):
         ok = sanity_pose(body, arm, h)
         cast.append({"root": root, "arm": arm, "body": body,
                      "fdir": fdir,
+                     "extras": [x for x in (garment, bikini, straps) if x],
                      "x": s["x"], "y": s["y"], "yaw": s["yaw"],
                      "turn": s["turn"]})
         meta.append({"tag": s["tag"], "verts": len(body.data.vertices),
@@ -3247,6 +3277,11 @@ def build(a):
             % (s["tag"], len(body.data.vertices), bool(arm), bool(garment)))
 
     bpy.context.view_layer.update()
+    # מדידת מה שהרנדרר רואה, **אחרי** שכל ההורות והטרנספורמים
+    # נקבעו. לפני זה המדידה היא של מצב ביניים ואינה אומרת דבר.
+    for c in cast:
+        for ex in c.get("extras") or []:
+            log_evaluated(ex)
     # **אחרון בשרשרת, ובכוונה.** ראה ``comb_hair``: כל נגיעה
     # ב-``ps.settings`` אחרי הסירוק מאפסת את המפתחות, ולכן זה
     # קורה רק כששתי הדמויות כבר בנויות במלואן.
