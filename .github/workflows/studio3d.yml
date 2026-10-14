@@ -64,6 +64,12 @@ env:
   # שהרג את הריצה 38525372548 (10.6GB בלי מפות, מוות איתן).
   # ברמה 1 הגוף הוא 42 אלף פאות - חלק דיו ב-960 רוחב.
   SUBDIV: '1'
+  # חזרה 6 ולא 18. נמדד בריצה 38526001823: ב-18 הפסיפס
+  # הכרומטי יורד מתחת לגודל פיקסל ונמחק בדגימה ובדינויז -
+  # ``chroma_std`` לא זז בכלל (4.85 מול 5.00), בעוד שהפירוט
+  # המקומי עלה 15%. ב-6 הכתמים הם 10-20 פיקסל, כלומר נמדדים.
+  TILE: '6'
+  CHROMA: '3.8'
   HBM: 'https://download.blender.org/demo/bundles/bundles-3.6/human-base-meshes-bundle-v1.0.0.zip'
 
 jobs:
@@ -121,7 +127,7 @@ jobs:
       - name: מפות עור CC0 (ויקישיתוף)
         run: |
           python -m pip install --quiet numpy pillow
-          python studio3d/skinmaps.py --out skin --size ${MAPSZ} --cache skinsrc
+          python studio3d/skinmaps.py --out skin --size ${MAPSZ} --cache skinsrc --chroma ${CHROMA}
           test -s skin/skin_albedo.png
           ls -l skin
           mkdir -p artifacts
@@ -149,7 +155,7 @@ jobs:
             ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
               --bundle hbm/human_base_meshes_bundle.blend \
               --hdri hdri/beach.hdr --out artifacts/smoke \
-              --skin skin --subdiv ${SUBDIV} \
+              --skin skin --subdiv ${SUBDIV} --skin-tile ${TILE} \
               --start $F --end $F --total ${TOTAL} \
               --samples 24 --width 480 --height 270
           done
@@ -217,7 +223,7 @@ jobs:
       - name: מפות עור CC0 (ויקישיתוף)
         run: |
           python -m pip install --quiet numpy pillow
-          python studio3d/skinmaps.py --out skin --size ${MAPSZ} --cache skinsrc
+          python studio3d/skinmaps.py --out skin --size ${MAPSZ} --cache skinsrc --chroma ${CHROMA}
           test -s skin/skin_albedo.png
       - name: רנדר מקטע
         run: |
@@ -228,7 +234,7 @@ jobs:
           ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
             --bundle hbm/human_base_meshes_bundle.blend \
             --hdri hdri/beach.hdr --out artifacts/frames \
-            --skin skin --subdiv ${SUBDIV} \
+            --skin skin --subdiv ${SUBDIV} --skin-tile ${TILE} \
             --start $S --end $E --total ${TOTAL} \
             --samples ${{ inputs.samples }} \
             --width ${{ inputs.width }} --height ${{ inputs.height }}
