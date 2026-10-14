@@ -144,10 +144,16 @@ jobs:
       # פריים אחד בלי מפות נותן את **הבסיס**, ולכן ההפרש מול
       # הפריים שאחריו הוא המספר המבוקש. עלות: 40 שניות.
       - name: בסיס זיכרון - פריים אחד בלי מפות
+        # תקרת זמן על **שלב מדידה**: הוא נמדד ב-40 שניות, ואם
+        # הוא חורג לשש דקות זה כבר לא בסיס אלא תקלה. בריצה
+        # 38573230459 הוא רץ 363 שניות ואז הרנר נהרג (143) -
+        # כלומר הוא בלע את כל ה-job ולא אמר כלום.
+        timeout-minutes: 6
         run: |
           ./${BLDIR}/blender -b --factory-startup -P studio3d/beach_studio.py -- \
             --bundle hbm/human_base_meshes_bundle.blend \
             --hdri hdri/beach.hdr --out artifacts/nomaps \
+            --hair-asset 0 --final-light 0 \
             --start 1 --end 1 --total ${TOTAL} \
             --samples 8 --width 320 --height 180 \
             2>&1 | grep -E "זיכרון|Finished|Error" | tail -12 \
