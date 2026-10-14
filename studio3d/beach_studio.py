@@ -364,12 +364,25 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         # מספרים של קבוצת ``chest`` - אחרת הבד יושב לידו ולא
         # עליו), יש רווח מפורש בעצם החזה, והקצה התחתון מתחדד
         # אל אפס בשני צדי הגביע - כלומר משולש שקודקודו למטה.
+        # **הרווח של 1.6 ס"מ היה קטן מדי, ונמדד בפריים.** שני
+        # הגביעים אכן נבנו נפרדים (``test_swimcut`` מוכיח), אבל
+        # ``make_garment`` מוסיף ``Solidify`` של 3.5 מ"מ ואחריו
+        # ``SUBSURF`` ברמה 2 - כלומר כל קצה מתעבה ומתעגל החוצה
+        # בכמילימטר לכל צד - ובפריים של 640 פיקסל רוחב, 3.2
+        # ס"מ של גו הם שבעה פיקסלים. שני כתמים במרחק שבעה
+        # פיקסלים זה כתם אחד. 3.0 ס"מ לכל צד (6 ס"מ רווח)
+        # הם 13 פיקסלים, וזה נקרא כשני חלקים.
         bx = abs(v.x)
-        cxx, cw = 0.072, 0.064
+        cxx, cw = 0.079, 0.052
         t_cup = 1.0 - min(1.0, abs(bx - cxx) / cw)
-        if torso and fwd > 0.02 and bx > 0.016 and t_cup > 0.0:
-            z_up = cut_tz + 0.028 * (t_cup ** 0.45)
-            z_dn = cut_tz - 0.052 * (t_cup ** 1.25)
+        if torso and fwd > 0.02 and bx > 0.030 and t_cup > 0.0:
+            # ``**0.95`` ולא ``**0.45`` בקצה העליון: עם 0.45
+            # הקצה העליון כמעט אינו יורד לצדדים, כלומר הצורה
+            # היא מלבן עם פינות - וזו רצועה. חזקה קרובה ל-1
+            # מורידה אותו ליניארית, והשילוב עם קצה תחתון תלול
+            # יותר נותן משולש אמיתי.
+            z_up = cut_tz + 0.030 * (t_cup ** 0.95)
+            z_dn = cut_tz - 0.058 * (t_cup ** 1.35)
             if z_dn < zj < z_up:
                 swim[i] = 1.0
         # רצועת הגב/צד: דקה, **ורק מאחור ובצדדים**. ``fwd<0.34``
@@ -383,9 +396,12 @@ def build_groups(body, h: float, fdir: float, swimcut: dict | None = None):
         # מוחק פאה שאחד מקודקודיה אינו בקבוצה, ועל רשת של
         # ~1.3 ס"מ רצועה צרה מזה מתפרקת לקודקודים בלי פאות -
         # כלומר נעלמת בשקט.
-        if torso and cut_tz < zr < 0.858 and fwd > -0.10:
-            tt_s = (zr - cut_tz) / (0.858 - cut_tz)
-            if abs(bx - cxx * (1.0 - 0.52 * tt_s)) < 0.015:
+        if torso and cut_tz + 0.020 < zr < 0.862 and fwd > -0.10:
+            tt_s = (zr - cut_tz - 0.020) / (0.862 - cut_tz - 0.020)
+            # הרצועה מתחילה מעל קצה הגביע (``+0.020``) ולא בגובהו:
+            # אחרת היא מתמזגת איתו ומרחיבה אותו כלפי מעלה, וזה
+            # מה שהפך את הצורה למלבן.
+            if abs(bx - cxx * (1.0 - 0.58 * tt_s)) < 0.013:
                 swim[i] = 1.0
         # --- תחתון: **גזרת רגל גבוהה, לא מכנסון.** קודם
         #     ``z_lo`` היה קבוע כמעט (0.452 ± 1 ס"מ), כלומר
@@ -923,8 +939,8 @@ def hair_material(name: str, col):
     # למרות שהוגדרו חום וכמעט-שחור. הצבה שאינה נופלת ואינה
     # עובדת היא הסוג הגרוע, כי היא לא מופיעה בשום לוג.
     _set(h, parametrization="COLOR")
-    for k, v in (("Color", (*col, 1.0)), ("Roughness", 0.26),
-                 ("Radial Roughness", 0.38), ("Coat", 0.12)):
+    for k, v in (("Color", (*col, 1.0)), ("Roughness", 0.34),
+                 ("Radial Roughness", 0.42), ("Coat", 0.05)):
         if k in h.inputs:
             h.inputs[k].default_value = v
     # וריאציית גוון בין גדיל לגדיל: בלי זה השיער קורא כגוש אחד
@@ -1524,16 +1540,24 @@ def world_hdri(hdri: Path, rot_deg: float = 118.0, strength: float = 1.0):
     # אמיתית ולא של גרדיאנט.
     sky = nt.nodes.new("ShaderNodeTexSky")
     for attr, val in (("sky_type", "NISHITA"),
-                      ("sun_elevation", math.radians(34.0)),
+                      # 52° ולא 34°: הקאדר הוא גוף-מלא, כלומר
+                      # המצלמה רואה רק רצועה דקה של שמיים ממש
+                      # מעל האופק. עם שמש נמוכה הרצועה הזאת היא
+                      # בדיוק אזור הפיזור הקדמי - לבן בוהק -
+                      # ובפריים המבחן היא יצאה כלוח לבן. שמש
+                      # גבוהה מרחיקה את הבוהק מהקאדר ומשאירה שם
+                      # תכלת.
+                      ("sun_elevation", math.radians(52.0)),
                       ("sun_rotation", math.radians(132.0)),
                       ("sun_disc", False),
-                      ("altitude", 2.0),
-                      # אוויר ים: אבק נמוך, אוזון רגיל. ערך אבק
-                      # גבוה מצהיב את האופק וזה נקרא כערפיח
-                      # ולא כחוף.
-                      ("air_density", 1.15),
-                      ("dust_density", 0.85),
-                      ("ozone_density", 1.0)):
+                      ("altitude", 0.0),
+                      # צפיפות **נמוכה** מ-1, לא גבוהה. יותר
+                      # אוויר ויותר אבק = יותר פיזור מרובה =
+                      # אופק לבן יותר. 0.72/0.25 נותנים אוויר
+                      # ים נקי שבו האופק עוד תכול.
+                      ("air_density", 0.72),
+                      ("dust_density", 0.25),
+                      ("ozone_density", 1.6)):
         try:
             setattr(sky, attr, val)
         except (AttributeError, TypeError):
@@ -2005,24 +2029,56 @@ def water_material():
     n3.inputs["Scale"].default_value = 1.45
     n3.inputs["Detail"].default_value = 9.0
     nt.links.new(tc.outputs["Object"], n3.inputs["Vector"])
+    # --- **דעיכת ה-Bump עם המרחק, וזו לא קוסמטיקה.**
+    #
+    # בפריים המבחן (ריצה s1014-125103) הים יצא **מפוספס בפסים
+    # אנכיים כהים ובהירים לסירוגין**, כמו גדר. זה אינו שיידר
+    # שבור אלא מוארה: במרחק 80-300 מטר, אדווה של 18 ס"מ ואפילו
+    # גל של 70 ס"מ הם הרבה מתחת לגודל פיקסל, וב**זווית לטיה**
+    # (המשטח כמעט מקביל לקו הראייה) כל פיקסל מכסה עשרות
+    # תקופות. ``Bump`` אינו ממצע לשטוח כמו שצבע עושה - הוא
+    # ממצע לנורמלים אקראיים, וזה יוצא רעש מובנה.
+    #
+    # ים אמיתי נראה חלק ככל שהוא רחוק, מאותה סיבה פיזיקלית
+    # בדיוק. לכן עוצמת שתי השכבות הדקות נגזרת מ-``dep`` (0 בקו
+    # המים, 1 במרחק): קרוב - כל הפירוט; רחוק - כמעט כלום.
+    def fade(y, near, far):
+        mr = nt.nodes.new("ShaderNodeMapRange")
+        mr.location = (-520, y)
+        mr.inputs["To Min"].default_value = near
+        mr.inputs["To Max"].default_value = far
+        mr.clamp = True
+        nt.links.new(dep.outputs["Result"], mr.inputs["Value"])
+        return mr
+
     bp = nt.nodes.new("ShaderNodeBump")
     bp.location = (-420, -260)
-    bp.inputs["Strength"].default_value = 0.95
+    # הגל הגדול (2.4 מטר) שורד גם רחוק - הוא עשרות פיקסלים
+    # שם - ולכן הוא דועך מעט בלבד.
     bp.inputs["Distance"].default_value = 0.130
+    nt.links.new(fade(-200, 0.95, 0.42).outputs["Result"],
+                 bp.inputs["Strength"])
     nt.links.new(n.outputs["Fac"], bp.inputs["Height"])
     bp3 = nt.nodes.new("ShaderNodeBump")
     bp3.location = (-300, -700)
-    bp3.inputs["Strength"].default_value = 0.80
     bp3.inputs["Distance"].default_value = 0.034
+    nt.links.new(fade(-640, 0.80, 0.06).outputs["Result"],
+                 bp3.inputs["Strength"])
     nt.links.new(n3.outputs["Fac"], bp3.inputs["Height"])
     nt.links.new(bp.outputs["Normal"], bp3.inputs["Normal"])
     bp2 = nt.nodes.new("ShaderNodeBump")
     bp2.location = (-180, -300)
-    bp2.inputs["Strength"].default_value = 0.70
     bp2.inputs["Distance"].default_value = 0.012
+    nt.links.new(fade(-880, 0.70, 0.00).outputs["Result"],
+                 bp2.inputs["Strength"])
     nt.links.new(n2.outputs["Fac"], bp2.inputs["Height"])
     nt.links.new(bp3.outputs["Normal"], bp2.inputs["Normal"])
     nt.links.new(bp2.outputs["Normal"], b.inputs["Normal"])
+    # ו-``Roughness`` עולה עם המרחק מאותה סיבה: המיקרו-גלים
+    # שאינם נפתרים עוד הם בדיוק מה ש"מחוספס" מתאר. בלי זה
+    # הים הרחוק הוא מראה חדה ומחזיר את השמיים ככתם לבן אחד.
+    nt.links.new(fade(-60, 0.045, 0.145).outputs["Result"],
+                 b.inputs["Roughness"])
     nt.links.new(b.outputs["BSDF"], out.inputs["Surface"])
     return mat, n
 
@@ -2287,7 +2343,7 @@ def build(a):
         {"tag": "noa", "x": -0.40, "y": 0.0, "yaw": math.radians(-13.0),
          "turn": math.radians(-21.0), "garment": "swim",
          "tone": (0.952, 0.788, 0.672), "flush": (0.90, 0.46, 0.39),
-         "hair": (0.830, 0.640, 0.318), "hair_len": 0.105,
+         "hair": (0.595, 0.372, 0.118), "hair_len": 0.105,
          "cloth": (0.055, 0.215, 0.330), "chest": 0.036, "scale": 1.000,
          "swim": {"top_z": 0.737, "top_w": 0.049, "top_wave": 0.017,
                   "hip_z": 0.548, "leg_z": 0.452, "hip_wave": 0.020}},
@@ -2300,7 +2356,7 @@ def build(a):
         {"tag": "tal", "x": 0.44, "y": 0.22, "yaw": math.radians(12.0),
          "turn": math.radians(8.0), "garment": "swim",
          "tone": (0.940, 0.766, 0.652), "flush": (0.88, 0.43, 0.37),
-         "hair": (0.885, 0.780, 0.530), "hair_len": 0.118,
+         "hair": (0.745, 0.572, 0.262), "hair_len": 0.118,
          "cloth": (0.830, 0.330, 0.355), "chest": 0.041, "scale": 0.962,
          "swim": {"top_z": 0.744, "top_w": 0.055, "top_wave": 0.013,
                   "hip_z": 0.561, "leg_z": 0.466, "hip_wave": 0.026}},
