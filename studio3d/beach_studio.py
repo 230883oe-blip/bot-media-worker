@@ -1716,19 +1716,37 @@ def make_bikini_top(body, h, fdir, mat, spec, name="top"):
     me.validate()
     ob = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(ob)
-    # הצמדה למשטח הגוף: כל קודקוד יושב בדיוק על העור + 5 מ"מ.
+    # הצמדה למשטח הגוף: כל קודקוד יושב בדיוק על העור + 8 מ"מ.
     for v in ob.data.vertices:
-        v.co = _stick_to_body(v.co, body, 0.0052)
+        v.co = _stick_to_body(v.co, body, 0.0080)
     bm = bmesh.new()
     bm.from_mesh(ob.data)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0014)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     bm.normal_update()
+    # **כיוון הפאות, והוא זה שהבליע את הגביעים בסבב הקודם.**
+    # ``from_pydata`` קובע כיוון לפי סדר הקודקודים שכתבתי, וכאן
+    # הוא יצא **אל תוך הגוף**. אז ``SOLIDIFY`` עם ``offset=1``
+    # דחק את הבד פנימה, הגביעים נבלעו בעור ובפריים נראה כאילו
+    # הגאומטריה החדשה לא נוצרה כלל - בעוד היומן דיווח 751
+    # קודקודים. ``recalc_face_normals`` מאחד כיוון אבל אינו
+    # יודע מה "החוצה" על משטח פתוח, ולכן יש כאן גם מבחן מפורש.
+    avg = mathutils.Vector((0.0, 0.0, 0.0))
+    for f in bm.faces:
+        avg += f.normal
+    if avg.y * fdir < 0.0:
+        bmesh.ops.reverse_faces(bm, faces=bm.faces[:])
+        log("    (הגביעים הופכו - הנורמלים הצביעו פנימה)")
     bm.to_mesh(ob.data)
     bm.free()
     _bind_like_body(ob, body, kd, per)
     sol = ob.modifiers.new("thick", "SOLIDIFY")
-    sol.thickness = 0.0032
-    sol.offset = 1.0
+    sol.thickness = 0.0040
+    # ``offset=0`` ולא 1: העובי מתפרס סימטרית סביב המשטח, ולכן
+    # הבד נראה **בלי תלות** בכיוון הנורמל. חגורת ביטחון שנייה
+    # על אותה תקלה, כי כיוון נורמלים הוא בדיוק הדבר שמשתנה
+    # בשקט כשמישהו נוגע בסדר הקודקודים.
+    sol.offset = 0.0
     sub = ob.modifiers.new("sub", "SUBSURF")
     sub.levels = 0
     sub.render_levels = 1
@@ -1780,14 +1798,18 @@ def make_top_straps(body, h, fdir, mat, spec, name="straps"):
 
     zc = cup_z * h
     for sgn in (-1.0, 1.0):
-        # רצועת צוואר: מהקודקוד העליון של הגביע אל העורף.
+        # **רצועת צוואר שעוברת מעל הכתף, לא על החזה.** בגרסה
+        # הקודמת המסלול הוגדר ב-``y`` של החזה ו-``_stick_to_body``
+        # הדביק אותו לשם, ולכן בפריים נראו שתי קשתות שטוחות על
+        # עצמות הבריח. רצועה אמיתית עולה **לצד** הצוואר ועוברת
+        # על הכתף, ולכן ``x`` גדל בדרך ואינו קטן.
         path = []
-        for j in range(12):
-            t = j / 11.0
-            x = sgn * (0.070 * (1.0 - t) + 0.026 * t)
-            z = zc + 0.085 + 0.145 * t
-            y = cy + fdir * (0.050 * (1.0 - t) - 0.070 * t)
-            path.append(_stick_to_body((x, y, z), body, 0.0060))
+        for j in range(14):
+            t = j / 13.0
+            x = sgn * (0.052 + 0.060 * math.sin(math.pi * t * 0.72))
+            z = (zc + 0.052) + (0.86 * h - zc - 0.052) * (t ** 0.78)
+            y = cy + fdir * (0.052 * (1.0 - t) - 0.058 * t)
+            path.append(_stick_to_body((x, y, z), body, 0.0075))
         tube(path)
     # רצועת גב אופקית סביב הגו, בגובה קצה הגביע.
     ring = []
