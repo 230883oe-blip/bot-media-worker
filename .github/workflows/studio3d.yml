@@ -167,6 +167,7 @@ jobs:
       # לגלות. 90 שניות כאן חוסכות שעת רנדר.
       - name: מבחן חיבור השיער לשלד
         run: |
+          set -o pipefail
           mkdir -p artifacts
           ./${BLDIR}/blender -b --factory-startup -P test_hairrig.py -- \
             --bundle hbm/human_base_meshes_bundle.blend \
@@ -201,6 +202,12 @@ jobs:
       # שלהם. זו כל הסיבה שהוא יושב כאן ולא אחרי הקידוד.
       - name: שער איכות מחמיר - ארבעה תנאי סף
         run: |
+          # **``set -o pipefail`` הוא כל ההבדל בין שער לדוח.**
+          # ב-bash קוד היציאה של צינור הוא של הפקודה האחרונה,
+          # כלומר של ``tee`` - והוא תמיד 0. בריצה 38575137016
+          # השער הדפיס "QA_GATE: נכשל", החזיר 1, והשלב נרשם
+          # כהצלחה; 20 מקטעי רינדור יצאו לדרך על תוצר שנפסל.
+          set -o pipefail
           python qa_gate.py --frames artifacts/smoke \
             --log artifacts/render.log \
             --json artifacts/qa_gate.json 2>&1 | tee artifacts/qa_gate.log
