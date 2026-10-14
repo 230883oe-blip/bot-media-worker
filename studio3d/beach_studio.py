@@ -1233,8 +1233,8 @@ def sand_material():
     #     מבז' "מדויק" מסיימים באפור.
     dune = noise(0.72, 5.0, 320, rough=0.48)
     dune_r = ramp(dune.outputs["Fac"], 320,
-                  0.26, (0.408, 0.272, 0.118),
-                  0.76, (0.880, 0.735, 0.452))
+                  0.26, (0.404, 0.330, 0.224),
+                  0.76, (0.806, 0.722, 0.552))
 
     # --- 2. אדוות רוח: **השכבה שמכריעה**. תקופה ~35 ס"מ.
     #     Noise מתוח בציר אחד דרך Mapping נותן פסים מכווננים
@@ -1251,8 +1251,8 @@ def sand_material():
     rip.inputs["Roughness"].default_value = 0.42
     nt.links.new(rip_map.outputs["Vector"], rip.inputs["Vector"])
     rip_r = ramp(rip.outputs["Fac"], 60,
-                 0.38, (0.300, 0.196, 0.082),
-                 0.62, (0.935, 0.820, 0.560))
+                 0.38, (0.330, 0.268, 0.180),
+                 0.62, (0.868, 0.800, 0.644))
     base = mix(160, None, dune_r.outputs["Color"], None,
                blend="OVERLAY", fac=0.52)
     nt.links.new(rip_r.outputs["Color"], base.inputs["Color2"])
@@ -1312,8 +1312,8 @@ def sand_material():
     # --- 5. הזרקת רוויה, נגד AgX.
     hs = nt.nodes.new("ShaderNodeHueSaturation")
     hs.location = (-380, -60)
-    hs.inputs["Saturation"].default_value = 1.58
-    hs.inputs["Value"].default_value = 1.12
+    hs.inputs["Saturation"].default_value = 1.10
+    hs.inputs["Value"].default_value = 0.98
     nt.links.new(w_mix.outputs["Color"], hs.inputs["Color"])
     nt.links.new(hs.outputs["Color"], b.inputs["Base Color"])
 
@@ -1614,7 +1614,7 @@ def build(a):
     # השתרע מישור הקצף - 30 מטר של לבן-אפרפר שקרא כמדרכה רטובה
     # וחתך את הפריים לשניים. חוף נקרא כחוף כשרצועת החול היא
     # הדבר הרחב בין הדמות לים, ולא להפך.
-    sand = sand_plane("sand", 120.0, (0.0, -38.0, 0.0))
+    sand = sand_plane("sand", 120.0, (0.0, -46.0, 0.0))
     sand.data.materials.append(sand_material())
     wmat, waves = water_material()
     water = plane("water", 500.0, (0.0, 140.0, -0.02))
@@ -1622,7 +1622,7 @@ def build(a):
     fmat, foam = foam_material()
     # קצף של 30 מטר אינו קצף אלא מישור. גל שנשבר מותיר רצועה
     # של 3-5 מטר, ולכן 9 - וממוקם בדיוק בקצה החול (y=22).
-    wet = plane("foam", 9.0, (0.0, 22.5, 0.028))
+    wet = plane("foam", 9.0, (0.0, 14.5, 0.028))
     wet.data.materials.append(fmat)
 
     bundle = Path(a.bundle)
