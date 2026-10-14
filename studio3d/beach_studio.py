@@ -3357,8 +3357,17 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=540)
     ap.add_argument("--subdiv", type=int, default=2,
                     help="רמות חלוקה ברינדור. 2=חלק, 1=חצי זיכרון")
-    ap.add_argument("--sep-top", type=int, default=1, dest="sep_top",
-                    help="חלק עליון כגאומטריה נפרדת (שני משולשים)")
+    # **ברירת המחדל 0, וזו החלטה ולא ויתור.** הגאומטריה הנפרדת
+    # נבנית נכון לחלוטין - נמדד תשע פעמים: 968 פאות, תיבת עולם
+    # על החזה, 1.8 ס"מ מחוץ לעור, חומר תקין, גם כיריעה פתוחה
+    # וגם כנפח סגור - ובכל זאת אינה מרונדרת ב-Cycles, בעוד
+    # אובייקט שנבנה באותה שרשרת בדיוק (``make_top_straps``) כן.
+    # הסיבה לא נמצאה. עד שתימצא, הדלקת הדגל מחליפה עליון שמכסה
+    # את החזה בעליון שאינו קיים - כלומר רגרסיה. הקוד נשאר,
+    # הדגל כבוי, והרצועות מבוטלות איתו.
+    ap.add_argument("--sep-top", type=int, default=0, dest="sep_top",
+                    help="חלק עליון כגאומטריה נפרדת. נבנה נכון "
+                         "ואינו מרונדר - ראה ההערה ב-make_bikini_top")
     ap.add_argument("--face-guard", type=int, default=1, dest="face_guard",
                     help="חסם שיער מול הפנים לפי מיקום העיניים")
     ap.add_argument("--hair-shell", type=int, default=0, dest="hair_shell",
