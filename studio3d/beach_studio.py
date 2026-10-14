@@ -4219,15 +4219,39 @@ def build(a):
                 continue
             extra.parent = root
             extra.matrix_parent_inverse = root.matrix_world.inverted()
+        # **הדמויות עמדו עם הגב למצלמה, וזה שורש כל הסבבים.**
+        #
+        # ``fit_camera`` מציבה את המצלמה ב-``ctr.y - dist``,
+        # כלומר בצד ה**שלילי** של Y והיא מביטה אל ‎+Y. הנכס
+        # (``face_dir``) נמדד כפונה אל ‎+Y, ו-``s["yaw"]`` היה
+        # ‎±13°‎ בלבד - כלומר הדמויות פנו **מהמצלמה והלאה**.
+        #
+        # כל מה שנראה כתקלה נפרדת נובע מזה, ועכשיו זה נמדד
+        # ולא משוער: ``log_camera_cover`` מדדה **96%** מקודקודי
+        # הגביעים מוסתרים על ידי הגוף, מול 24% ברצועות. הגביעים
+        # היו תמיד במקום הנכון - על החזה - והמצלמה פשוט ראתה
+        # את הגב. ה"חוט המתפתל על החזה" הוא רצועת הגב, ו"השיער
+        # שמכסה את הפנים" הוא העורף. שישה סבבים כיוונו גאומטריה
+        # תקינה לגמרי.
+        #
+        # הסיבוב נגזר מהמדידה ואינו קבוע: אם הנכס פונה אל ‎+Y
+        # צריך חצי סיבוב, ואם הוא פונה אל ‎-Y לא צריך כלום.
+        face_yaw = math.pi if fdir > 0.0 else 0.0
+        yaw = s["yaw"] + face_yaw
         root.location = (s["x"], s["y"], 0.0)
-        root.rotation_euler = (0.0, 0.0, s["yaw"])
+        root.rotation_euler = (0.0, 0.0, yaw)
         root.scale = (s["scale"],) * 3
         ok = sanity_pose(body, arm, h)
         cast.append({"root": root, "arm": arm, "body": body,
                      "fdir": fdir,
                      "extras": [x for x in (garment, bikini, straps) if x],
                      "curves": curves,
-                     "x": s["x"], "y": s["y"], "yaw": s["yaw"],
+                     # **ה-yaw שנשמר הוא זה שכולל את חצי
+                     # הסיבוב.** האנימציה (``pose_frame``) כותבת
+                     # ``root.rotation_euler`` מחדש בכל פריים
+                     # מתוך ``c["yaw"]``, ובלי זה פריים 1 היה
+                     # נכון וכל 120 הפריימים היו מסתובבים חזרה.
+                     "x": s["x"], "y": s["y"], "yaw": yaw,
                      "turn": s["turn"]})
         meta.append({"tag": s["tag"], "verts": len(body.data.vertices),
                      "rigged": bool(arm), "pose_sane": ok,
