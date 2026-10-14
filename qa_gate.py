@@ -130,6 +130,18 @@ def check_top(img: np.ndarray, cloth_rgb, tol=0.16):
         ys = np.nonzero(col.any(axis=1))[0]
         if len(ys) > 10:
             top, bot = int(ys.min()), int(ys.max())
+            # **אותה תקלה בדיוק כמו בתיבת הפנים.**
+            # subject_mask חוסמת הכול מעל 18% מהקאדר, ולכן
+            # ה"פסגה" שלה היא קו הכתפיים ולא קודקוד הראש:
+            # נמדד top=97 במקום 19. חלון החזה, שנגזר כאחוז
+            # **מגובה הדמות**, החליק לכן 70 פיקסלים מטה ונחת
+            # מתחת לגביעים - והשער פסל שני משולשים שרואים
+            # בבירור בפריים. הפסגה האמיתית נמצאת מלמעלה לפי
+            # "לא שמיים", בדיוק כמו ב-check_face_hair.
+            band = img[:, x0:x1]
+            cand = np.nonzero((band.max(axis=2) < 0.93).sum(axis=1) >= 4)[0]
+            if len(cand):
+                top = min(top, int(cand.min()))
             span = bot - top
             y0 = top + int(span * 0.22)
             y1 = top + int(span * 0.40)
@@ -237,12 +249,28 @@ def check_face_hair(logtext: str, img=None, min_skin=0.28):
                     top = ht
             span = bot - top
             # אזור הפנים: 3%..11% מגובה הדמות, שליש מרכזי ברוחב.
-            fy0, fy1 = top + int(span * 0.03), top + int(span * 0.11)
-            xs = np.nonzero(col.any(axis=0))[0]
-            cx0, cx1 = int(xs.min()), int(xs.max())
+            # **5.5%..12.5% ולא 3%..11%, וזה מדידה אנטומית.**
+            # על דמות של 1.70 מטר שהראש שלה 23 ס"מ, קו העיניים
+            # יושב כ-11 ס"מ מתחת לקודקוד (6.5% מגובה הגוף) והפה
+            # כ-18 ס"מ (10.5%). החלון הישן התחיל ב-3%, כלומר
+            # בכתר, ונגמר לפני הפה - ולכן הוא מדד בעיקר שיער
+            # גם כשהפנים גלויות לגמרי. נבדק על הפריים.
+            fy0, fy1 = top + int(span * 0.055), top + int(span * 0.125)
+            # **רוחב הראש, ולא רוחב הגוף - וזו הטעות שהחזירה
+            # 0% עור על דמות עם פנים גלויות.** col מכסה את
+            # כל הדמות כולל **זרועות פרושות**, ולכן "השליש
+            # המרכזי ברוחב" יצא x=158..319 בזמן שהראש יושב
+            # ב-x≈340. כלומר תיבת הפנים נפלה ליד הראש לגמרי.
+            # כאן הרוחב נמדד **מתוך שורות הפנים עצמן**.
+            hb = band[fy0:fy1]
+            hm = (hb.max(axis=2) < 0.93).any(axis=0)
+            hxs = np.nonzero(hm)[0]
+            if len(hxs) < 4:
+                continue
+            cx0, cx1 = int(hxs.min()), int(hxs.max())
             cw = cx1 - cx0
-            fx0 = cx0 + int(cw * 0.30)
-            fx1 = cx0 + int(cw * 0.70)
+            fx0 = cx0 + int(cw * 0.22)
+            fx1 = cx0 + int(cw * 0.78)
             box = subject_mask(img[fy0:fy1, x0 + fx0:x0 + fx1], clip=False)
             fr.append(round(float(box.mean()), 4))
         det["face_skin_fraction"] = fr
