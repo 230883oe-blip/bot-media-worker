@@ -1233,8 +1233,8 @@ def sand_material():
     #     מבז' "מדויק" מסיימים באפור.
     dune = noise(0.72, 5.0, 320, rough=0.48)
     dune_r = ramp(dune.outputs["Fac"], 320,
-                  0.26, (0.404, 0.330, 0.224),
-                  0.76, (0.806, 0.722, 0.552))
+                  0.26, (0.398, 0.280, 0.140),
+                  0.76, (0.872, 0.742, 0.498))
 
     # --- 2. אדוות רוח: **השכבה שמכריעה**. תקופה ~35 ס"מ.
     #     Noise מתוח בציר אחד דרך Mapping נותן פסים מכווננים
@@ -1251,8 +1251,8 @@ def sand_material():
     rip.inputs["Roughness"].default_value = 0.42
     nt.links.new(rip_map.outputs["Vector"], rip.inputs["Vector"])
     rip_r = ramp(rip.outputs["Fac"], 60,
-                 0.38, (0.330, 0.268, 0.180),
-                 0.62, (0.868, 0.800, 0.644))
+                 0.38, (0.306, 0.212, 0.106),
+                 0.62, (0.922, 0.822, 0.602))
     base = mix(160, None, dune_r.outputs["Color"], None,
                blend="OVERLAY", fac=0.52)
     nt.links.new(rip_r.outputs["Color"], base.inputs["Color2"])
@@ -1312,8 +1312,8 @@ def sand_material():
     # --- 5. הזרקת רוויה, נגד AgX.
     hs = nt.nodes.new("ShaderNodeHueSaturation")
     hs.location = (-380, -60)
-    hs.inputs["Saturation"].default_value = 1.10
-    hs.inputs["Value"].default_value = 0.98
+    hs.inputs["Saturation"].default_value = 0.92
+    hs.inputs["Value"].default_value = 1.03
     nt.links.new(w_mix.outputs["Color"], hs.inputs["Color"])
     nt.links.new(hs.outputs["Color"], b.inputs["Base Color"])
 
