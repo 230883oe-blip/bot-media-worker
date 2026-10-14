@@ -1872,16 +1872,65 @@ def hair_curves_asset(body, eyes, h, fdir, groups, col, spec,
             # של עובי תסרוקת). **מתחת** לקו הצוואר אין חסם -
             # שם השיער אמור ליפול חופשי על הכתפיים, וזה בדיוק
             # ההבדל בין תסרוקת לקסדה.
+            # ------- סבב 14/10 (ז): "צמר גפן" -> תסרוקת שנופלת
+            #
+            # ``iso_hair`` הראה הילה שמתפרצת רדיאלית לכל עבר
+            # ומעל הכתפיים לא נופל דבר. שני חוסרים, ושניהם
+            # בשלב הזה ולא בנודים:
+            #
+            #   1. **החסם הכדורי חל רק מעל ``neck_z``.** מתחת
+            #      לקו הצוואר אין שום חסם, ושם בדיוק נמצאה
+            #      ההתפרצות האופקית הרחבה ביותר בתמונה. שיער
+            #      שנופל על הכתף הוא קרוב לגוף, לא 20 ס"מ
+            #      באוויר - ולכן יש עכשיו ``qmax_low``, רחב
+            #      יותר מהעליון (הכתפיים רחבות מהגולגולת) אבל
+            #      סופי.
+            #   2. **אין כובד.** הגדילים יוצאים מהקרקפת לאורך
+            #      הנורמל ואף שלב לא מושך אותם מטה, ולכן גדיל
+            #      שצומח מהרקה נשאר אופקי - וזו הפרווה. כאן
+            #      כל נקודה נמשכת מטה לפי מיקומה **לאורך
+            #      הגדיל**: השורש אינו זז בכלל (``w=0``) והקצה
+            #      יורד ``drop`` מלא. ``w = t**1.7`` ולא ``t``:
+            #      נפילה ליניארית מכופפת את הגדיל כבר ליד
+            #      השורש ומשטחת את נפח התסרוקת.
+            #
+            # המשיכה הצידה מלווה את הנפילה: גדיל שיורד גם
+            # מתקרב אל הציר, אחרת הוא יורד אנכית ומשאיר את
+            # אותו קוטר - וילון, וזה מה שנראה בפריים הקודם.
             clamped = 0
-            qmax = 1.18
+            qmax = 1.06
+            qmax_low = 1.34
+            drop = 0.052
+            inward = 0.34
+            offs, acc = [], 0
+            for n in sizes:
+                offs.append((acc, n))
+                acc += n
+            if acc == baked:
+                for s0, n in offs:
+                    if n < 2:
+                        continue
+                    for j in range(1, n):
+                        t = j / (n - 1.0)
+                        w = t ** 1.7
+                        i = s0 + j
+                        x, y, z = (flat[3 * i], flat[3 * i + 1],
+                                   flat[3 * i + 2])
+                        flat[3 * i] = hc.x + (x - hc.x) * (1.0 - inward * w)
+                        flat[3 * i + 1] = cy + (y - cy) * (1.0 - inward * w)
+                        flat[3 * i + 2] = z - drop * w
+            else:
+                log("    (אורכי הגדילים %d != %d נקודות - בלי כובד)"
+                    % (acc, baked))
             for i in range(baked):
                 x, y, z = flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]
-                if z > neck_z:
+                qlim = qmax if z > neck_z else qmax_low
+                if True:
                     qx = (x - hc.x) / hr.x
                     qy = (y - hc.y) / hr.y
                     q = math.hypot(qx, qy)
-                    if q > qmax:
-                        k = qmax / q
+                    if q > qlim:
+                        k = qlim / q
                         x = hc.x + qx * k * hr.x
                         y = hc.y + qy * k * hr.y
                         flat[3 * i] = x
@@ -2225,6 +2274,52 @@ def comb_hair(body, fdir: float, down: float = 0.86, back: float = 0.42):
 
 # --------------------------------------------------------------- בגדים
 
+def _drop_small_isles(bm, name: str, isle_frac: float = 0.22) -> int:
+    """מוחק רכיבי קשירות קטנים מ-``isle_frac`` מהגדול. מחזיר כמה ירדו.
+
+    הסריקה היא BFS על ``vert.link_faces``/``face.verts`` ולא
+    ``select_linked`` של ה-ops: ב-``-b`` אין הקשר עריכה, ו-ops
+    שנכשל בשקט היה מחזיר בדיוק את אותו פריים שבור בלי שורה
+    ביומן. כאן כל רכיב נספר ונרשם.
+    """
+    import bmesh                                             # noqa: PLC0415
+    # **אחרי מחיקה האינדקסים אינם תקפים.** ``bmesh.ops.delete``
+    # מסיר אלמנטים בלי לדחוס את הטבלה, ו-``f.index`` של פאה
+    # ששרדה עלול להצביע על מקום של פאה שנמחקה. סריקת רכיבים
+    # שמפתחה הוא ``index`` הייתה אז מאחדת איים זרים בשקט.
+    bm.faces.ensure_lookup_table()
+    bm.faces.index_update()
+    seen, isles = set(), []
+    for f0 in bm.faces:
+        if f0.index in seen:
+            continue
+        stack, comp = [f0], []
+        seen.add(f0.index)
+        while stack:
+            f = stack.pop()
+            comp.append(f)
+            for e in f.edges:
+                for nf in e.link_faces:
+                    if nf.index not in seen:
+                        seen.add(nf.index)
+                        stack.append(nf)
+        isles.append(comp)
+    if len(isles) <= 1:
+        return 0
+    isles.sort(key=len, reverse=True)
+    floor = max(3, int(len(isles[0]) * isle_frac))
+    doomed = [f for comp in isles[1:] if len(comp) < floor for f in comp]
+    sizes = [len(c) for c in isles]
+    if not doomed:
+        log("  %s: %d איים, כולם מעל הסף %d · %s"
+            % (name, len(isles), floor, sizes[:8]))
+        return 0
+    bmesh.ops.delete(bm, geom=doomed, context="FACES")
+    log("  %s: %d איים %s -> נמחקו %d פאות מתחת ל-%d"
+        % (name, len(isles), sizes[:8], len(doomed), floor))
+    return len(doomed)
+
+
 def make_garment(body, idx: dict, name: str, mat, thick=0.0035,
                  offset=0.0022):
     """בגד = עותק של תת-אזור הגוף, נדחק חוצה ומקבל עובי.
@@ -2238,14 +2333,48 @@ def make_garment(body, idx: dict, name: str, mat, thick=0.0035,
     ob = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(ob)
     keep = set(idx)
-    bm_del = [v for i, v in enumerate(me.vertices) if i not in keep]
     # מחיקה דרך bmesh: מחיקת קודקודים ישירות מ-mesh אינה API.
     import bmesh                                             # noqa: PLC0415
     bm = bmesh.new()
     bm.from_mesh(me)
     bm.verts.ensure_lookup_table()
-    doomed = [bm.verts[i] for i in range(len(bm.verts)) if i not in keep]
+    bm.faces.ensure_lookup_table()
+    # ---------------- סבב 14/10 (ז): התחתון שהתפרק לכתמים צפים
+    #
+    # עד כאן נמחק כל קודקוד שאינו בקבוצה, כלומר **פאה שרדה רק
+    # אם כל ארבעת קודקודיה בקבוצה**. בפריים האחרון זה החזיר
+    # בדמות הוורודה שלושה כתמים מנותקים צפים ולא בגד.
+    #
+    # החשבון שמסביר את זה: מרווח הקודקודים בנכס הוא ‎~1.5‎ ס"מ,
+    # ורצועת המותן שהקוד מבקש היא ‎abs(zj-cut_hz) < 0.0125‎,
+    # כלומר ‎2.5‎ ס"מ. חלון בעובי של פאה וחצי מבטיח שבחלק
+    # מהטבעות **אין אף פאה ששולחת ארבעה קודקודים** - והרצועה,
+    # שהיא בדיוק מה שמחבר את חלקי התחתון, נעלמת. מה שנשאר הם
+    # האזורים העבים בלבד, מנותקים זה מזה.
+    #
+    # ולמה דווקא הדמות השנייה נשברה חזק יותר: היא ‎scale=0.962‎,
+    # ולכן אותם חלונות במטרים נופלים על טבעות קודקודים אחרות.
+    # זו אינה תקלה נפרדת - זו אותה תקלה ברגישות גבוהה.
+    #
+    # שני שינויים, ושניהם טופולוגיים ולא מספריים (כלומר אינם
+    # תלויים בסקייל של הדמות ולא בצפיפות המש):
+    #
+    #   1. **פאה נשמרת לפי רוב ולא לפי הכל.** ‎>=2‎ קודקודים
+    #      בקבוצה מספיקים. זה מרחיב את הבד בחצי פאה לכל כיוון
+    #      וסוגר את הרצועה הדקה במקום למחוק אותה.
+    #   2. **איים מנותקים קטנים נמחקים.** אחרי הבנייה סופרים
+    #      רכיבי קשירות; כל רכיב שהוא פחות מ-``isle_frac``
+    #      מהגדול יורד. כתם צף אינו "בגד קטן", הוא פסולת.
+    face_keep = []
+    for f in bm.faces:
+        n_in = sum(1 for v in f.verts if v.index in keep)
+        if n_in >= 2 or (n_in and n_in == len(f.verts)):
+            face_keep.append(f)
+    if face_keep:
+        keep = {v.index for f in face_keep for v in f.verts}
+    doomed = [v for v in bm.verts if v.index not in keep]
     bmesh.ops.delete(bm, geom=doomed, context="VERTS")
+    _drop_small_isles(bm, name, isle_frac=0.22)
     # **אחרי** המחיקה. נורמל של קודקוד שאיבד חצי מהפאות שלו הוא
     # נורמל אחר, ודחיקה לפי הנורמל הישן הייתה פותחת את הבגד
     # בשוליים בדיוק במקום שהוא צריך להיות צמוד.
