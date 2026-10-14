@@ -77,6 +77,24 @@ def log(*a):
     print("[studio]", *a, flush=True)
 
 
+def rss_mb() -> float:
+    """זיכרון התהליך במגה-בייט. 0.0 אם לא נמצא.
+
+    הריצה 38523912537 נהרגה ב-shutdown של הרנר אחרי שבלנדר
+    הגיע לשיא 11.5GB, ומהיומן לא היה אפשר לדעת אם זה **הבנייה**
+    (UV, טקסטורות) או **סנכרון Cycles** (שיער × subdivision).
+    בלי המספר הזה כל תיקון הוא ניחוש, ולכן הוא נרשם בשני
+    הצמתים: אחרי הבנייה ואחרי כל פריים.
+    """
+    try:
+        for ln in open("/proc/self/status", encoding="utf-8"):
+            if ln.startswith("VmRSS:"):
+                return round(float(ln.split()[1]) / 1024.0, 1)
+    except Exception:                                        # noqa: BLE001
+        pass
+    return 0.0
+
+
 def wipe():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
@@ -670,7 +688,12 @@ def skin_material(name: str, tone, flush=(0.76, 0.33, 0.30),
             t.location = (-1280, y)
             t.image = img
             t.extension = "REPEAT"
-            t.interpolation = "Cubic"
+            # **Linear ולא Cubic.** ב-Cycles אינטרפולציה קובית
+            # של תמונת 8 ביט אינה נתמכת בנתיב הבייטים, ולכן
+            # התמונה מומרת ל-float4 - פי ארבעה זיכרון לכל מפה.
+            # עם ``tile`` של 18 המפה ממילא דחוסה מאוד ביחס
+            # לפיקסל, והפרש האיכות אינו נראה.
+            t.interpolation = "Linear"
             if non_color:
                 try:
                     img.colorspace_settings.name = "Non-Color"
@@ -1579,12 +1602,14 @@ def main() -> int:
         log("ייצוא הנכס נכשל (%s) - שער הפרופורציות יישאר סגור" % e)
 
     sc = bpy.context.scene
+    log("זיכרון אחרי הבנייה: %.1fMB  (מפות עור: %s)"
+        % (rss_mb(), SKIN_INFO.get("used")))
     for f in range(a.start, a.end + 1):
         sc.frame_set(f)
         apply_frame(cast, cam, cam0, dist, ctr, f, a.total, waves, foam)
         sc.render.filepath = str(out / ("f%04d" % f))
         bpy.ops.render.render(write_still=True)
-        log("פריים %d/%d נכתב" % (f, a.total))
+        log("פריים %d/%d נכתב, זיכרון %.1fMB" % (f, a.total, rss_mb()))
     return 0
 
 
