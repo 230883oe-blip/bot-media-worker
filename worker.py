@@ -54,6 +54,18 @@ NONCE = os.environ.get("CLOUD_NONCE", "").strip()
 TG_UPLOAD_LIMIT = 48 * 1024 * 1024        # Bot API מעלה עד 50MB; שוליים
 _cfg: dict = {}
 
+# 24/10 — סיבת הכישלון האחרונה, לדיווח חזרה למוח בענן. בלי זה הודעת
+# הכישלון היחידה הייתה "עובד הענן לא הצליח", כלומר אין שום דרך לדעת
+# *למה*: אם יוטיוב חסמה את ה-IP, אם טלגרם דחתה את הקובץ, או אם הקישור
+# בכלל לא היה מדיה. יומן הריצה של GitHub דורש טוקן לקריאה, ולכן זו
+# הדרך היחידה שבה המידע מגיע למי שמאבחן.
+LAST_WHY = ""
+
+
+def note_why(msg: str) -> None:
+    """רושם את סיבת הכישלון האחרונה (נשלחת לענן עם work=fail)."""
+    globals()["LAST_WHY"] = str(msg)[:180]
+
 
 # --------------------------------------------------------------- כלים
 
@@ -228,6 +240,7 @@ def ytdlp(url: str, dest: Path, audio: bool = False) -> Path | None:
     res = run(cmd + [url], timeout=2400)
     if res.returncode != 0:
         log("yt-dlp: " + (res.stderr or "")[-400:])
+        note_why("yt-dlp: " + " ".join((res.stderr or "").split())[-160:])
     # הנתיב המדויק שיצא, מפי yt-dlp עצמו — ולא ניחוש לפי גודל.
     for line in reversed((res.stdout or "").splitlines()):
         cand = Path(line.strip())
@@ -242,22 +255,60 @@ def ytdlp(url: str, dest: Path, audio: bool = False) -> Path | None:
     return max(files, key=lambda f: f.stat().st_size) if files else None
 
 
-def direct(url: str, dest: Path) -> Path | None:
-    """הורדה ישרה של קישור לקובץ (למשל מה שהשער הציבורי החזיר)."""
+def direct(url: str, dest: Path, name_hint: str = "") -> Path | None:
+    """
+    הורדה ישרה של קישור לקובץ (למשל מה שהשער הציבורי החזיר).
+
+    24/10 — **דף HTML נדחה במפורש.** עד היום קישור של עמוד (youtu.be/xxx)
+    הורד כאן בהצלחה, נשמר בשם `xxx.mp4` כי אין לנתיב סיומת, והוחזר
+    כ"קובץ המקור". משם הוא נשלח לטלגרם כסרטון, טלגרם דחתה אותו, והכל
+    נראה כמו "ההורדה הצליחה אבל השליחה לא" — אבחון שגוי לגמרי.
+    """
     dest.mkdir(parents=True, exist_ok=True)
-    name = re.sub(r"[\\/:*?\"<>|]+", "_",
-                  urllib.parse.unquote(Path(urllib.parse.urlparse(url).path).name)) or "media"
+    name = re.sub(r"[\\/:*?\"<>|]+", "_", (name_hint or "").strip()) or \
+        re.sub(r"[\\/:*?\"<>|]+", "_",
+               urllib.parse.unquote(Path(urllib.parse.urlparse(url).path).name)) or "media"
+    if len(name) > 80:
+        name = name[:80]
     if not re.search(r"\.[a-z0-9]{2,4}$", name, re.I):
         name += ".mp4"
     out = dest / name
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as r, out.open("wb") as f:
-            shutil.copyfileobj(r, f, 1 << 20)
+        with urllib.request.urlopen(req, timeout=600) as r:
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if "text/html" in ctype or "application/xhtml" in ctype:
+                log(f"הקישור הוא דף אינטרנט ולא קובץ מדיה ({ctype}) — נדחה")
+                return None
+            head = r.read(512)
+            if head[:15].lstrip()[:5].lower() in (b"<!doc", b"<html"):
+                log("התוכן נפתח בתגית HTML — לא קובץ מדיה, נדחה")
+                return None
+            with out.open("wb") as f:
+                f.write(head)
+                shutil.copyfileobj(r, f, 1 << 20)
     except Exception as exc:
         log(f"הורדה ישרה נכשלה: {exc!r}")
         return None
     return out if out.exists() and out.stat().st_size > 1000 else None
+
+
+def gate_link(url: str, audio: bool) -> dict:
+    """
+    מבקש מהמוח בענן קישור ישיר מהשער הציבורי.
+
+    24/10 — זה המסלול שפותר את החסימה האמיתית: יוטיוב חוסמת את טווחי
+    ה-IP של מכונות CI, ולכן yt-dlp כאן נכשל על סרטונים שמתוך גוגל
+    יורדים מצוין. נמדד באותו יום: אותו קישור בדיוק החזיר 403 לכתובת
+    הביתית ו-200 לענן של גוגל. הענן מבקש (ה-IP שלו מורשה), העובד מוריד.
+    """
+    try:
+        d = api({"work": "gate", "u": url, "audio": "1" if audio else "0",
+                 "q": "720"}, 240) or {}
+    except Exception as exc:
+        log(f"בקשת שער ציבורי נכשלה: {exc!r}")
+        return {}
+    return d if d.get("ok") and d.get("url") else {}
 
 
 # --------------------------------------------------------- ffmpeg עצמו
@@ -366,9 +417,21 @@ def source_file(job: dict, jdir: Path) -> Path | None:
         url = m.group(0) if m else ""
     if not url:
         return None
-    audio = bool(WANT_AUDIO.search(job.get("text") or ""))
+    audio = bool(WANT_AUDIO.search(job.get("text") or "")) \
+        or bool((job.get("extra") or {}).get("audio"))
     got = ytdlp(url, jdir, audio)
-    return got or direct(url, jdir)
+    if got:
+        return got
+    # 24/10 — הסדר הזה הוא כל התיקון. עד היום אחרי yt-dlp שנכשל נוסה
+    # `direct(url)` על **כתובת העמוד**, כלומר הורדת דף HTML; השער
+    # הציבורי, שהוא היחיד שעובד מ-IP של מכונת CI, לא נוסה בכלל.
+    g = gate_link(url, audio)
+    if g:
+        log(f"שער ציבורי החזיר קישור ישיר: {str(g.get('name'))[:60]}")
+        got = direct(str(g["url"]), jdir, str(g.get("name") or ""))
+        if got:
+            return got
+    return direct(url, jdir)
 
 
 def tg_text(token: str, chat, text: str) -> bool:
@@ -469,6 +532,7 @@ def handle(job: dict) -> bool:
 
     src = source_file(job, jdir)
     if not src:
+        note_why(LAST_WHY or "לא הצלחתי להשיג את קובץ המקור")
         return False
     log(f"מקור: {src.name}  {src.stat().st_size / 1048576:.1f}MB")
 
@@ -512,7 +576,17 @@ def handle(job: dict) -> bool:
     else:
         cap = "⬇️ הורד בענן, בלי המחשב."
 
+    if not token:
+        # 24/10: עבודה בלי מפתח שליחה הגיעה לכאן מפני שהמוח בענן מסר
+        # אותה עם שם בוט שאינו מוכר. אין למי לשלוח, והעבודה כולה הייתה
+        # נשרפת בשקט. עכשיו זה נאמר בקול, וגם נחסם בצד הענן.
+        note_why("העבודה הגיעה בלי מפתח שליחה (שם בוט לא מוכר)")
+        shutil.rmtree(jdir, ignore_errors=True)
+        return False
+    size_mb = result.stat().st_size / 1048576
     ok = tg_send(token, chat, result, cap)
+    if not ok:
+        note_why(f"השליחה לטלגרם נכשלה ({size_mb:.0f} מגה, {result.suffix})")
     shutil.rmtree(jdir, ignore_errors=True)
     return ok
 
@@ -569,21 +643,33 @@ def main() -> int:
             time.sleep(IDLE_SLEEP)
             continue
         idle_since = time.time()
+        why = ""
         try:
             ok = handle(job)
         except Exception as exc:
             log(f"העבודה קרסה: {exc!r}")
+            why = f"קרסה: {exc!r}"[:150]
             ok = False
         if ok:
             done += 1
             log(f"עבודה {job.get('id')} הסתיימה")
+            # 24/10 — דיווח הצלחה. בלעדיו לענן אין שום דרך לדעת שעבודה
+            # הושלמה, ולכן גם לא לדעת שעבודה **לא** הושלמה: מכונה שמתה
+            # באמצע לא השאירה עקבה, והמשתמש המתין לנצח לקובץ שהובטח לו.
+            try:
+                api({"work": "done", "id": job.get("id", ""),
+                     "bot": job.get("bot", ""), "chat": job.get("chat", "")})
+            except Exception as exc:
+                log(f"דיווח הצלחה נכשל: {exc!r}")
         else:
             log(f"עבודה {job.get('id')} נכשלה — מחזיר למחשב")
             try:
                 api({"work": "fail", "bot": job.get("bot", ""), "chat": job.get("chat", ""),
-                     "text": (job.get("text") or "")[:300], "why": "עובד הענן לא הצליח"})
+                     "text": (job.get("text") or "")[:300],
+                     "why": why or LAST_WHY or "עובד הענן לא הצליח"})
             except Exception:
                 pass
+        globals()["LAST_WHY"] = ""
     log(f"סיום. {done} עבודות הושלמו.")
     return 0
 
