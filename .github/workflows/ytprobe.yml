@@ -1,6 +1,6 @@
 name: ytprobe
 # בדיקת שטח: אילו מסלולי הורדה מיוטיוב עובדים מ-IP של רנר (25/10/2026).
-# אין כאן שום סוד ואין קלט — רק מדידה שמודפסת ליומן הריצה.
+# סבב ב' בודק את המסלול "הענן מבקש, הרנר מוריד" מקצה לקצה.
 on:
   workflow_dispatch:
 
@@ -13,6 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -q --disable-pip-version-check yt-dlp
       - name: probe
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+          GAS_ADMIN: ${{ secrets.GAS_ADMIN }}
         run: python cloudclaude/ytprobe.py
