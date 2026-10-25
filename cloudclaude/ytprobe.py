@@ -68,12 +68,27 @@ def main() -> int:
     except Exception:                                   # noqa: BLE001
         pass
 
+    targets = [URL, "https://www.youtube.com/watch?v=aqz-KE-bpKQ"]
+    import os as _os
+    if _os.environ.get("YT_URL"):
+        targets = [_os.environ["YT_URL"]]
+    ok_all = True
+    for t in targets:
+        print(chr(10) + ">>> " + t, flush=True)
+        ok_all = one(t) and ok_all
+    print(chr(10) + "===== מסקנה =====")
+    print("הורדת יוטיוב בענן עובדת מקצה לקצה" if ok_all
+          else "לא כל הסרטונים ירדו — ראה למעלה")
+    return 0 if ok_all else 1
+
+
+def one(URL: str) -> bool:
     g = gate(URL)
     print("תשובת השער:", json.dumps({k: (str(v)[:70]) for k, v in g.items()},
                                      ensure_ascii=False))
     if not g.get("ok") or not g.get("url"):
         say(False, "שער בענן", "לא החזיר קישור: " + str(g.get("tried"))[:200])
-        return 1
+        return False
     say(True, "שער בענן",
         f"{g.get('kind')} {g.get('client') or ''} {g.get('name')}")
 
@@ -81,10 +96,10 @@ def main() -> int:
         n = download(g["url"], "/tmp/yt.mp4")
     except urllib.error.HTTPError as exc:
         say(False, "הורדה מהרנר", f"HTTP {exc.code}")
-        return 1
+        return False
     except Exception as exc:                            # noqa: BLE001
         say(False, "הורדה מהרנר", f"{type(exc).__name__}: {str(exc)[:120]}")
-        return 1
+        return False
     ok = n > 50000
     say(ok, "הורדה מהרנר", f"{n / 1048576:.2f}MB")
 
@@ -95,10 +110,7 @@ def main() -> int:
         except Exception as exc:                        # noqa: BLE001
             say(False, "שמע נפרד", type(exc).__name__)
 
-    print("\n===== מסקנה =====")
-    print("הורדת יוטיוב בענן עובדת מקצה לקצה" if ok
-          else "השער עובד אבל ההורדה מהרנר נכשלה — הקישור נעול ל-IP")
-    return 0 if ok else 1
+    return ok
 
 
 if __name__ == "__main__":
