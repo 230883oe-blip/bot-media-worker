@@ -160,6 +160,71 @@ jobs:
           fi
           exit 0
 
+      # 25/10 — רשת ביטחון להזדהות שנפלה.
+      #
+      # מה קרה (ריצה 40165649304, 07:28): קלוד ענה משפט אחד באנגלית,
+      # `Failed to authenticate. API Error: 401 OAuth access token has
+      # been revoked.`, והשלב הבא שלח אותו לטלגרם *כתשובה*. המשתמש ראה
+      # "עובד על זה עכשיו" ואחריו שגיאת 401, וזה כל מה שקיבל. השורש
+      # הוא באסימון (אנתרופיק מבטלת את הקודם בכל רענון, והמחשב ישן ולא
+      # דחף חדש), אבל גם *אחרי* שתיקנו את השורש אסור שכשל הזדהות ייראה
+      # כך: שגיאה באנגלית אינה תשובה, ובקשה שלא בוצעה חייבת לא להיעלם.
+      #
+      # לכן: מזוהה ככשל הזדהות -> הבקשה המקורית נרשמת לתור המחשב דרך
+      # המוח בענן, הסוד מסומן שם כמת (כדי שלא תופעל עוד ריצה כזו),
+      # והתשובה לטלגרם מוחלפת בהסבר אחד בעברית.
+      #
+      # הכתובת והמפתח עוברים כ**סודות** ולא כקלט לריצה: הריפו הזה
+      # ציבורי, וקלט של workflow_dispatch נרשם בדף הריצה בגלוי.
+      - name: הצלה בכשל הזדהות
+        if: always()
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+          GAS_ADMIN: ${{ secrets.GAS_ADMIN }}
+          CHAT: ${{ inputs.chat }}
+        run: |
+          set +e
+          SIZE=$(wc -c < /tmp/answer.txt 2>/dev/null || echo 0)
+          if [ "$SIZE" -gt 900 ]; then exit 0; fi
+          if ! grep -qiE "Failed to authenticate|OAuth|Invalid API key|Please run /login|401|credit balance" /tmp/answer.txt; then
+            exit 0
+          fi
+          echo "זוהה כשל הזדהות — מציל את הבקשה"
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          task = ""
+          try:
+              raw = open("/tmp/task.txt", encoding="utf-8", errors="replace").read()
+              m = re.search(r"המשימה:\s*\n(.+)\Z", raw, re.S)
+              task = (m.group(1) if m else raw).strip()
+          except Exception as exc:
+              print("קריאת המשימה נכשלה:", exc)
+          url, admin = os.environ.get("GAS_URL", ""), os.environ.get("GAS_ADMIN", "")
+          if not (url and admin and task):
+              print("אין לאן לדווח (חסר סוד או משימה)")
+              raise SystemExit(0)
+          body = json.dumps({"admin": admin, "action": "claudefail",
+                             "bot": "agent", "chat": os.environ.get("CHAT", ""),
+                             "task": task[:3000]}).encode()
+          req = urllib.request.Request(url, data=body,
+                                       headers={"Content-Type": "application/json"})
+          try:
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  print("דווח למוח בענן:", r.read()[:200].decode("utf-8", "replace"))
+          except Exception as exc:
+              print("דיווח נכשל:", repr(exc)[:200])
+          PY
+          cat > /tmp/answer.txt <<'EOF'
+          ⚠️ לא הצלחתי להזדהות מול חשבון קלוד מתוך הענן: אסימון המנוי
+          שיושב כאן פג או בוטל, והוא מתחדש רק כשהמחשב דלוק.
+
+          הבקשה לא אבדה — רשמתי אותה, והיא תבוצע במלואה ברגע שהמחשב
+          יידלק. אם אתה צריך תשובה עכשיו, שלח אותה שוב ואענה לך מיד
+          במודל החינמי.
+          EOF
+          : > /tmp/err.txt
+          : > /tmp/note.txt
+
       - name: סיכום לדף הריצה
         if: always()
         run: |
