@@ -289,8 +289,13 @@ def direct(url: str, dest: Path, name_hint: str = "") -> Path | None:
                 shutil.copyfileobj(r, f, 1 << 20)
     except Exception as exc:
         log(f"הורדה ישרה נכשלה: {exc!r}")
+        note_why(f"הורדה ישרה נכשלה: {type(exc).__name__}")
         return None
-    return out if out.exists() and out.stat().st_size > 1000 else None
+    if out.exists() and out.stat().st_size > 1000:
+        log(f"ירד {out.stat().st_size / 1048576:.1f}MB -> {out.name[:60]}")
+        return out
+    note_why("הקובץ שירד היה ריק או קטן מדי")
+    return None
 
 
 def gate_link(url: str, audio: bool) -> dict:
@@ -419,19 +424,47 @@ def source_file(job: dict, jdir: Path) -> Path | None:
         return None
     audio = bool(WANT_AUDIO.search(job.get("text") or "")) \
         or bool((job.get("extra") or {}).get("audio"))
+
+    def via_gate() -> Path | None:
+        # 24/10 — זה המסלול שעובד מ-IP של מכונת CI: המוח בענן מבקש
+        # מהשער הציבורי קישור ישיר (ה-IP של גוגל מורשה), והמכונה מורידה
+        # ממנו. אין כאן שום תקרת גודל: הבתים לא עוברים דרך Apps Script.
+        g = gate_link(url, audio)
+        if not g:
+            note_why("השער הציבורי לא החזיר קישור ישיר לקובץ הזה")
+            return None
+        log(f"שער ציבורי החזיר קישור ישיר: {str(g.get('name'))[:60]}")
+        out = direct(str(g["url"]), jdir, str(g.get("name") or ""))
+        if not out:
+            note_why("השער החזיר קישור, אבל ההורדה ממנו נכשלה")
+        return out
+
+    # 25/10 — **ליוטיוב השער קודם ל-yt-dlp, ולא להפך.** נמדד כאן פעמיים
+    # באותה שעה: yt-dlp על רנר של GitHub מחזיר "Sign in to confirm you're
+    # not a bot" על *כל* סרטון, כי יוטיוב חוסמת את טווחי ה-IP של מכונות
+    # CI. כלומר הניסיון הראשון היה כישלון מובטח שעולה זמן ודקות מכסה,
+    # ורק אחריו נוסה המסלול שכן עובד. אתרים אחרים (טיקטוק, אינסטגרם,
+    # קישור ישיר לקובץ) דווקא עובדים טוב ב-yt-dlp, ושם הסדר נשאר.
+    yt = re.search(r"(?:youtube\.com|youtu\.be)", url, re.I)
+    if yt:
+        got = via_gate()
+        if got:
+            return got
+        got = ytdlp(url, jdir, audio)
+        if got:
+            return got
+        return direct(url, jdir)
+
     got = ytdlp(url, jdir, audio)
     if got:
         return got
-    # 24/10 — הסדר הזה הוא כל התיקון. עד היום אחרי yt-dlp שנכשל נוסה
-    # `direct(url)` על **כתובת העמוד**, כלומר הורדת דף HTML; השער
-    # הציבורי, שהוא היחיד שעובד מ-IP של מכונת CI, לא נוסה בכלל.
-    g = gate_link(url, audio)
-    if g:
-        log(f"שער ציבורי החזיר קישור ישיר: {str(g.get('name'))[:60]}")
-        got = direct(str(g["url"]), jdir, str(g.get("name") or ""))
-        if got:
-            return got
-    return direct(url, jdir)
+    got = via_gate()
+    if got:
+        return got
+    out = direct(url, jdir)
+    if not out:
+        note_why(LAST_WHY or "לא הצלחתי להוריד את הקישור בשום מסלול")
+    return out
 
 
 def tg_text(token: str, chat, text: str) -> bool:
