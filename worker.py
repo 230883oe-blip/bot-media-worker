@@ -315,7 +315,7 @@ def direct(url: str, dest: Path, name_hint: str = "") -> Path | None:
     return None
 
 
-def gate_link(url: str, audio: bool) -> dict:
+def gate_link(url: str, audio: bool, nocobalt: bool = False) -> dict:
     """
     מבקש מהמוח בענן קישור ישיר מהשער הציבורי.
 
@@ -326,7 +326,7 @@ def gate_link(url: str, audio: bool) -> dict:
     """
     try:
         d = api({"work": "gate", "u": url, "audio": "1" if audio else "0",
-                 "q": "720"}, 240) or {}
+                 "q": "720", "nc": "1" if nocobalt else "0"}, 240) or {}
     except Exception as exc:
         log(f"בקשת שער ציבורי נכשלה: {exc!r}")
         return {}
@@ -442,11 +442,11 @@ def source_file(job: dict, jdir: Path) -> Path | None:
     audio = bool(WANT_AUDIO.search(job.get("text") or "")) \
         or bool((job.get("extra") or {}).get("audio"))
 
-    def via_gate() -> Path | None:
+    def via_gate(nocobalt: bool = False) -> Path | None:
         # 24/10 — זה המסלול שעובד מ-IP של מכונת CI: המוח בענן מבקש
         # מהשער הציבורי קישור ישיר (ה-IP של גוגל מורשה), והמכונה מורידה
         # ממנו. אין כאן שום תקרת גודל: הבתים לא עוברים דרך Apps Script.
-        g = gate_link(url, audio)
+        g = gate_link(url, audio, nocobalt)
         if not g:
             note_why("השער הציבורי לא החזיר קישור ישיר לקובץ הזה")
             return None
@@ -484,6 +484,14 @@ def source_file(job: dict, jdir: Path) -> Path | None:
     yt = re.search(r"(?:youtube\.com|youtu\.be)", url, re.I)
     if yt:
         got = via_gate()
+        if got:
+            return got
+        # 25/10 — נסיון שני מול אותו שער, בלי cobalt. נמדד שהשער מחזיר
+        # לפעמים קישור תקני שמאחוריו אפס בתים (0.00MB על Big Buck Bunny,
+        # 0.71MB על סרטון אחר באותה דקה), ואת זה רואים רק כאן. בנסיון
+        # השני המוח בענן מחלץ את הזרם ישר מגוגל (InnerTube) — ה-IP שלו
+        # מורשה, ולכן זה המסלול היחיד שאינו תלוי בשרת צד-שלישי.
+        got = via_gate(nocobalt=True)
         if got:
             return got
         got = ytdlp(url, jdir, audio)
