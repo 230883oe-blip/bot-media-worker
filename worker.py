@@ -450,10 +450,29 @@ def source_file(job: dict, jdir: Path) -> Path | None:
         if not g:
             note_why("השער הציבורי לא החזיר קישור ישיר לקובץ הזה")
             return None
-        log(f"שער ציבורי החזיר קישור ישיר: {str(g.get('name'))[:60]}")
+        log(f"שער ציבורי החזיר קישור ישיר ({g.get('kind') or 'שער'}): "
+            f"{str(g.get('name'))[:60]}")
         out = direct(str(g["url"]), jdir, str(g.get("name") or ""))
         if not out:
             note_why("השער החזיר קישור, אבל ההורדה ממנו נכשלה")
+            return None
+        # 25/10 — חילוץ ישר מגוגל (InnerTube) מחזיר לפעמים זרם וידאו
+        # בלי שמע (adaptive), ואז קובץ "שהורד בהצלחה" הוא סרט אילם.
+        # השמע מגיע בקישור שני, וכאן הוא ממוזג. כישלון מיזוג מחזיר את
+        # הווידאו כמו שהוא — עדיף אילם על כלום, ונאמר ביומן.
+        aurl = str(g.get("audio_url") or "")
+        if aurl and not audio:
+            apath = direct(aurl, jdir, "gate_audio.m4a")
+            if apath:
+                merged = jdir / ("merged_" + out.name)
+                res = run([ffmpeg_exe(), "-y", "-i", str(out), "-i", str(apath),
+                           "-c", "copy", "-map", "0:v:0", "-map", "1:a:0",
+                           "-movflags", "+faststart", str(merged)], timeout=1800)
+                if res.returncode == 0 and merged.exists() and \
+                        merged.stat().st_size > 20000:
+                    log("מוזגו וידאו ושמע מהשער")
+                    return merged
+                log("מיזוג השמע נכשל — מחזיר את הווידאו בלבד")
         return out
 
     # 25/10 — **ליוטיוב השער קודם ל-yt-dlp, ולא להפך.** נמדד כאן פעמיים
