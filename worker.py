@@ -237,8 +237,25 @@ def ytdlp(url: str, dest: Path, audio: bool = False) -> Path | None:
         cmd += ["-x", "--audio-format", "mp3"]
     else:
         cmd += ["--merge-output-format", "mp4"]
-    res = run(cmd + [url], timeout=2400)
-    if res.returncode != 0:
+    # 25/10 — **יוטיוב חוסמת את טווחי ה-IP של מכונות CI**, ונמדד כאן שלוש
+    # פעמים: "Sign in to confirm you're not a bot. Use --cookies". בלי
+    # קובץ cookies (ואין לנו, וזו חשבון גוגל של המשתמש) הדרך היחידה בלי
+    # הרשמה היא להתחזות ללקוח אחר של יוטיוב: לקוח הטלוויזיה ולקוח המובייל
+    # אינם דורשים התחברות על אותן בקשות. מנסים בזה אחר זה, והראשון
+    # שמחזיר קובץ מנצח. זה לא עולה כלום כשהראשון מצליח.
+    clients = [[]]
+    if re.search(r"(?:youtube\.com|youtu\.be)", url, re.I):
+        clients = [[], ["--extractor-args", "youtube:player_client=tv"],
+                   ["--extractor-args", "youtube:player_client=android"],
+                   ["--extractor-args", "youtube:player_client=ios,mweb"]]
+    res = None
+    for extra_args in clients:
+        res = run(cmd + extra_args + [url], timeout=2400)
+        if res.returncode == 0:
+            break
+        tail = " ".join((res.stderr or "").split())[-160:]
+        log(f"yt-dlp{(' ' + extra_args[1]) if extra_args else ''}: {tail}")
+    if res is not None and res.returncode != 0:
         log("yt-dlp: " + (res.stderr or "")[-400:])
         note_why("yt-dlp: " + " ".join((res.stderr or "").split())[-160:])
     # הנתיב המדויק שיצא, מפי yt-dlp עצמו — ולא ניחוש לפי גודל.
