@@ -1,0 +1,122 @@
+name: chain4
+on:
+  workflow_dispatch:
+jobs:
+  c1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow
+      - name: clip 1
+        timeout-minutes: 20
+        run: python chain/step.py 1 chain/start.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-1
+          path: artifacts/
+          if-no-files-found: warn
+  c2:
+    needs: c1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-1
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow
+      - name: clip 2
+        timeout-minutes: 20
+        run: python chain/step.py 2 prev/last_1.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-2
+          path: artifacts/
+          if-no-files-found: warn
+  c3:
+    needs: c2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-2
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow
+      - name: clip 3
+        timeout-minutes: 20
+        run: python chain/step.py 3 prev/last_2.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-3
+          path: artifacts/
+          if-no-files-found: warn
+  c4:
+    needs: c3
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-3
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow
+      - name: clip 4
+        timeout-minutes: 20
+        run: python chain/step.py 4 prev/last_3.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-4
+          path: artifacts/
+          if-no-files-found: warn
+  mux:
+    needs: c4
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clip-*
+          path: clips
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install av pillow
+      - name: concat
+        run: |
+          mkdir -p out
+          python - <<'PY'
+          import av, glob
+          fs = sorted(glob.glob("clips/clip-*/clip_*.mp4")); print(fs)
+          o = av.open("out/chain.mp4", "w"); st = o.add_stream("libx264", rate=30); st.width, st.height = 704, 384; st.pix_fmt = "yuv420p"; st.options = {"crf": "17"}
+          for f in fs:
+              for fr in av.open(f).decode(video=0):
+                  fr2 = fr.reformat(width=704, height=384, format="yuv420p")
+                  for p in st.encode(fr2): o.mux(p)
+          for p in st.encode(): o.mux(p)
+          o.close()
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain
+          path: out/
