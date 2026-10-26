@@ -18,13 +18,12 @@ def run(vid):
 server_path = None
 t0 = time.time()
 try:
-    run(handle_file("v2v/input.mp4"))                      # מעלה את הקובץ לשרת; נכשל אבל חושף את הנתיב
+    run(handle_file("v2v/input_704.mp4"))                      # מעלה את הקובץ לשרת; נכשל אבל חושף את הנתיב
 except Exception as e:
     m = re.search(r"'path': '([^']+)'", str(e))
     server_path = m.group(1) if m else None
     log["upload_probe"] = {"secs": round(time.time() - t0, 1), "server_path": server_path}
-COMBOS = [(2, 9, 704, 384), (2, 17, 704, 384), (2, 25, 704, 384), (3, 25, 704, 384),
-          (3, 49, 704, 384), (2, 9, 512, 288), (1, 9, 704, 384), (4, 33, 704, 384)]
+COMBOS = [(2, 25, 704, 384), (2, 9, 704, 384), (2, 49, 704, 384)]
 if server_path:
     def runc(vid, d, fr, w, h):
         return c.predict(prompt=PROMPT, negative_prompt=NEG, input_image_filepath=None,
