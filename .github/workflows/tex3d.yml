@@ -13,7 +13,7 @@ jobs:
       - run: pip -q install gradio_client
       - name: generation_all
         continue-on-error: true
-        run: python tex3d/job2.py
+        run: python tex3d/job3.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
