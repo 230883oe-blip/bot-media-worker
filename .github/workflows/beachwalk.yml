@@ -42,12 +42,27 @@ jobs:
           pattern: frames-*
           merge-multiple: true
           path: frames
-      - run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          ls frames | wc -l
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: mux (PyAV, בלי apt)
+        timeout-minutes: 10
+        run: |
+          pip -q install av pillow
           mkdir -p out
-          ffmpeg -y -framerate 24 -i frames/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 17 out/beachwalk.mp4
-          cp frames/f_0001.png frames/f_0036.png frames/f_0060.png out/ || true
+          python - <<'PY'
+          import av, glob
+          from PIL import Image
+          fs = sorted(glob.glob("frames/f_*.png")); print(len(fs))
+          w, h = Image.open(fs[0]).size
+          o = av.open("out/beachwalk.mp4", "w")
+          st = o.add_stream("libx264", rate=24); st.width, st.height = w, h; st.pix_fmt = "yuv420p"; st.options = {"crf": "17"}
+          for f in fs:
+              for p in st.encode(av.VideoFrame.from_image(Image.open(f).convert("RGB"))): o.mux(p)
+          for p in st.encode(): o.mux(p)
+          o.close()
+          PY
+          cp frames/f_0001.png frames/f_0036.png out/ || true
       - uses: actions/upload-artifact@v4
         with:
           name: beachwalk
