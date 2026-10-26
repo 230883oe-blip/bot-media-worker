@@ -1,0 +1,54 @@
+name: beachwalk
+on:
+  workflow_dispatch:
+env:
+  BL: '4.2.9'
+  BLDIR: blender-4.2.9-linux-x64
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxrender1 libxxf86vm1 libxfixes3 libgl1 libsm6 libxkbcommon0 xz-utils
+      - name: blender
+        run: |
+          curl -fL --max-time 600 -o blender.tar.xz "https://download.blender.org/release/Blender4.2/blender-${BL}-linux-x64.tar.xz"
+          tar xf blender.tar.xz
+      - name: render 12 frames
+        run: |
+          S=$(( ${{ matrix.shard }} * 12 + 1 )); E=$(( S + 11 ))
+          mkdir -p frames
+          ./${BLDIR}/blender -b beachwalk/scene.blend -E CYCLES -o "$PWD/frames/f_####" -F PNG -s $S -e $E -a 2>&1 | grep -E "Fra:|Time|Error|Saved" | tail -8
+          ls frames | wc -l
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frames-${{ matrix.shard }}
+          path: frames/
+  mux:
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frames-*
+          merge-multiple: true
+          path: frames
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          ls frames | wc -l
+          mkdir -p out
+          ffmpeg -y -framerate 24 -i frames/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 17 out/beachwalk.mp4
+          cp frames/f_0001.png frames/f_0036.png frames/f_0060.png out/ || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beachwalk
+          path: out/
