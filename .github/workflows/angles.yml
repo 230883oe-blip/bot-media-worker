@@ -1,0 +1,27 @@
+name: angles
+on:
+  workflow_dispatch:
+jobs:
+  ang:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [{"inp": "ang/body.png", "az": 90, "tag": "body"}, {"inp": "ang/body.png", "az": 270, "tag": "body"}, {"inp": "ang/body.png", "az": 45, "tag": "body"}, {"inp": "ang/body.png", "az": 315, "tag": "body"}, {"inp": "ang/body.png", "az": 180, "tag": "body"}, {"inp": "ang/body.png", "az": 135, "tag": "body"}, {"inp": "ang/body.png", "az": 225, "tag": "body"}, {"inp": "ang/head.png", "az": 90, "tag": "head"}, {"inp": "ang/head.png", "az": 270, "tag": "head"}, {"inp": "ang/head.png", "az": 45, "tag": "head"}, {"inp": "ang/head.png", "az": 315, "tag": "head"}]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client
+      - name: view
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python ang/job.py ${{ matrix.inp }} ${{ matrix.az }} ${{ matrix.tag }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ang-${{ matrix.tag }}-${{ matrix.az }}
+          path: artifacts/
+          if-no-files-found: warn
