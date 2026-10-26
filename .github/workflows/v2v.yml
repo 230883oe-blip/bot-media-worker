@@ -1,0 +1,23 @@
+name: v2v-test
+on:
+  workflow_dispatch:
+jobs:
+  v2v:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client
+      - name: ltx video-to-video
+        continue-on-error: true
+        timeout-minutes: 20
+        run: python v2v/job.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v2v
+          path: artifacts/
+          if-no-files-found: warn
