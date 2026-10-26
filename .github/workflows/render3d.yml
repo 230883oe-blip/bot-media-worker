@@ -1,0 +1,36 @@
+name: render3d-test
+on:
+  workflow_dispatch:
+env:
+  BL: '4.2.9'
+  BLDIR: blender-4.2.9-linux-x64
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxrender1 libxxf86vm1 libxfixes3 libgl1 libsm6 libxkbcommon0 xz-utils ffmpeg
+          free -m; nproc; (nvidia-smi || echo "no nvidia-smi")
+      - name: blender
+        run: |
+          curl -fL --max-time 600 -o blender.tar.xz "https://download.blender.org/release/Blender4.2/blender-${BL}-linux-x64.tar.xz"
+          tar xf blender.tar.xz
+          ./${BLDIR}/blender --version
+      - name: stills
+        run: |
+          mkdir -p artifacts
+          /usr/bin/time -v ./${BLDIR}/blender -b --factory-startup -P render3d/render.py -- render3d/girl.glb artifacts still 2> artifacts/still_time.txt | tail -5
+          grep -E "Elapsed|Maximum resident" artifacts/still_time.txt
+      - name: turntable
+        run: |
+          ./${BLDIR}/blender -b --factory-startup -P render3d/render.py -- render3d/girl.glb frames turn | tail -3
+          ffmpeg -y -framerate 12 -i frames/t_%03d.png -c:v libx264 -pix_fmt yuv420p artifacts/turntable.mp4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: render3d
+          path: artifacts/
