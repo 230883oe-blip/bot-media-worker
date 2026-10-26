@@ -23,15 +23,26 @@ except Exception as e:
     m = re.search(r"'path': '([^']+)'", str(e))
     server_path = m.group(1) if m else None
     log["upload_probe"] = {"secs": round(time.time() - t0, 1), "server_path": server_path}
+COMBOS = [(2, 9, 704, 384), (2, 17, 704, 384), (2, 25, 704, 384), (3, 25, 704, 384),
+          (3, 49, 704, 384), (2, 9, 512, 288), (1, 9, 704, 384), (4, 33, 704, 384)]
 if server_path:
-    t0 = time.time()
-    try:
-        r = run(server_path)
-        v = r[0]; v = v.get("video") if isinstance(v, dict) else v
-        log["v2v"] = {"secs": round(time.time() - t0, 1), "path": str(v)}
-        if v and os.path.exists(v):
-            shutil.copy(v, out / "v2v_result.mp4"); log["ok"] = True
-    except Exception as e:
-        log["v2v"] = {"secs": round(time.time() - t0, 1), "error": f"{type(e).__name__}: {str(e)[:400]}"}
+    def runc(vid, d, fr, w, h):
+        return c.predict(prompt=PROMPT, negative_prompt=NEG, input_image_filepath=None,
+                         input_video_filepath=vid, height_ui=h, width_ui=w, mode="video-to-video",
+                         duration_ui=d, ui_frames_to_use=fr, seed_ui=42, randomize_seed=False,
+                         ui_guidance_scale=1, improve_texture_flag=False, api_name="/text_to_video")
+    for d, fr, w, h in COMBOS:
+        key = f"d{d}_f{fr}_{w}x{h}"
+        t0 = time.time()
+        try:
+            r = runc(server_path, d, fr, w, h)
+            v = r[0]; v = v.get("video") if isinstance(v, dict) else v
+            log[key] = {"secs": round(time.time() - t0, 1), "path": str(v)}
+            if v and os.path.exists(v):
+                shutil.copy(v, out / f"v2v_{key}.mp4"); log["ok"] = key
+                break
+        except Exception as e:
+            log[key] = {"secs": round(time.time() - t0, 1), "error": f"{type(e).__name__}: {str(e)[:160]}"}
+        time.sleep(4)
 (out / "v2v_log.json").write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
 print(json.dumps(log, ensure_ascii=False, indent=1))
