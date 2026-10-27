@@ -1,0 +1,137 @@
+name: chain6
+on:
+  workflow_dispatch:
+jobs:
+  c1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow opencv-python-headless numpy
+      - name: clip 1
+        timeout-minutes: 30
+        run: python chain2/step.py 1 chain2/start.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-1
+          path: artifacts/
+          if-no-files-found: warn
+  c2:
+    needs: c1
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-1
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow opencv-python-headless numpy
+      - name: clip 2
+        timeout-minutes: 30
+        run: python chain2/step.py 2 prev/last_1.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-2
+          path: artifacts/
+          if-no-files-found: warn
+  c3:
+    needs: c2
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-2
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow opencv-python-headless numpy
+      - name: clip 3
+        timeout-minutes: 30
+        run: python chain2/step.py 3 prev/last_2.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-3
+          path: artifacts/
+          if-no-files-found: warn
+  c4:
+    needs: c3
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-3
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow opencv-python-headless numpy
+      - name: clip 4
+        timeout-minutes: 30
+        run: python chain2/step.py 4 prev/last_3.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-4
+          path: artifacts/
+          if-no-files-found: warn
+  c5:
+    needs: c4
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-4
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow opencv-python-headless numpy
+      - name: clip 5
+        timeout-minutes: 30
+        run: python chain2/step.py 5 prev/last_4.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-5
+          path: artifacts/
+          if-no-files-found: warn
+  c6:
+    needs: c5
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: clip-5
+          path: prev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip -q install gradio_client av pillow opencv-python-headless numpy
+      - name: clip 6
+        timeout-minutes: 30
+        run: python chain2/step.py 6 prev/last_5.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-6
+          path: artifacts/
+          if-no-files-found: warn
