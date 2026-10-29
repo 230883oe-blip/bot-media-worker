@@ -1,0 +1,94 @@
+name: ollama-ask
+run-name: ollama ${{ inputs.n }}
+
+# Ollama אמיתי על ראנר של GitHub - CPU בן 4 ליבות ו-16GB זיכרון, חינם.
+#
+# למה זה קיים (29/10/26): המכונה הביתית היא 7.5GB זיכרון בסך הכול, ולכן
+# המודל המקומי שם מוגבל ל-4B. לראנר של GitHub יש פי שניים זיכרון, ולכן
+# הוא מריץ 12B - אותה משפחה בדיוק (gemma3), גרסה גדולה פי שלוש.
+#
+# התשובה חוזרת כ-artifact ולא דרך שרת. זו החלטה מכוונת: artifact נקרא
+# דרך ה-API הרגיל עם אותו טוקן, בלי לפתוח שום פורט ובלי webhook.
+
+on:
+  workflow_dispatch:
+    inputs:
+      q:
+        description: "השאלה"
+        required: true
+      n:
+        description: "מזהה הריצה (לזיהוי ה-artifact)"
+        required: true
+      model:
+        description: "שם המודל ב-Ollama"
+        required: false
+        default: "gemma3:12b"
+      fallback:
+        description: "מודל חלופי אם הראשון לא נמשך"
+        required: false
+        default: "gemma3:4b"
+      img:
+        description: "נתיב תמונה בתוך הריפו (ריק = בלי תמונה)"
+        required: false
+        default: ""
+      sys:
+        description: "הנחיית מערכת"
+        required: false
+        default: ""
+
+jobs:
+  ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: התקנת Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama --version
+
+      - name: הרמת השרת
+        # ollama serve לא חוזר לעולם, ולכן nohup+& חובה. ההמתנה היא
+        # בלולאה קצרה עם תקרה - לא "sleep 30" ולא המתנה בלי גבול.
+        run: |
+          nohup ollama serve > /tmp/ollama-serve.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf http://127.0.0.1:11434/api/tags > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:11434/api/tags || (cat /tmp/ollama-serve.log; exit 1)
+
+      - name: הורדת המודל
+        # אם המודל הגדול לא נמשך (שם שגוי / דיסק) - נופלים לקטן ולא
+        # מפילים את כל הריצה. ריצה שמחזירה תשובה ממודל קטן עדיפה על
+        # ריצה שמחזירה שגיאה.
+        run: |
+          ollama pull "${{ inputs.model }}" \
+            || ollama pull "${{ inputs.fallback }}" \
+            || ollama pull gemma3:4b
+          ollama list
+
+      - name: השאלה
+        env:
+          OLL_Q: ${{ inputs.q }}
+          OLL_MODEL: ${{ inputs.model }}
+          OLL_FALLBACK: ${{ inputs.fallback }}
+          OLL_IMG: ${{ inputs.img }}
+          OLL_SYS: ${{ inputs.sys }}
+        # הטקסט עובר דרך env ולא דרך שורת הפקודה: שאלה בעברית עם
+        # גרשיים או $ הייתה נשברת בתוך shell, וזו גם דלת להזרקת פקודות.
+        run: python3 ollama_worker/ask_ollama.py
+
+      - name: העלאת התשובה
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: answer-${{ inputs.n }}
+          path: answer.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: יומן השרת (רק אם נכשל)
+        if: failure()
+        run: cat /tmp/ollama-serve.log || true
