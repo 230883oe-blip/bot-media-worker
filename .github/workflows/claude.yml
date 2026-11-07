@@ -53,6 +53,10 @@ on:
         description: '1 = בלי שכפול קוד כלל (שאלה כללית)'
         required: false
         default: ''
+      model:
+        description: הדגם (ריק = opus, כמו במחשב)
+        required: false
+        default: 'opus'
 
 jobs:
   think:
@@ -67,6 +71,42 @@ jobs:
 
       - name: התקנת Claude Code
         run: npm install -g @anthropic-ai/claude-code
+
+      # 08/11 — חידוש עצמי של ההזדהות, וזה מה שמאפשר שבוע של מחשב כבוי.
+      #
+      # עד כאן הריצה הזו הזדהתה עם *אסימון הגישה* שהמחשב דחף לסוד.
+      # אסימון כזה תקף שמונה שעות, ולכן מרגע כיבוי המחשב הריצה עבדה
+      # עוד 8 שעות ואחר כך החזירה `401 OAuth access token has been
+      # revoked` — נמדד 25/10 (ריצה 40165649304) ושוב 08/11. מהיום
+      # הריצה מחזיקה *אסימון רענון* (סוד CLAUDE_REFRESH_TOKEN) ומחדשת
+      # לעצמה אסימון גישה בכל פעם. אסימון רענון תקף 28 יום, וכל חידוש
+      # דוחף את תוקפו קדימה — כלומר אין יותר תקרת זמן.
+      #
+      # pynacl דרוש כדי לכתוב בחזרה את הסוד (sealed box של libsodium).
+      # בלי כתיבה חזרה היה זה חידוש חד-פעמי: הסיבוב מבטל את האסימון
+      # הקודם, והריצה הבאה הייתה נופלת.
+      - name: חידוש הזדהות
+        id: auth
+        env:
+          CLAUDE_REFRESH_TOKEN: ${{ secrets.CLAUDE_REFRESH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLOUD_CRED_KEY: ${{ secrets.CLOUD_CRED_KEY }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set +e
+          pip install --quiet pynacl 2>/dev/null
+          if [ -f cloudclaude/cloudrefresh.py ]; then
+            python3 cloudclaude/cloudrefresh.py --out /tmp/claude_token.txt
+            echo "rc=$?"
+          else
+            echo "אין cloudrefresh.py בריפו — נשארים על האסימון שנדחף"
+            printenv CLAUDE_CODE_OAUTH_TOKEN > /tmp/claude_token.txt
+          fi
+          if [ -s /tmp/claude_token.txt ]; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: הכנת תיקיית עבודה
         id: ws
@@ -102,15 +142,25 @@ jobs:
       - name: הרצת קלוד
         id: run
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           TASK: ${{ inputs.task }}
           MINUTES: ${{ inputs.minutes }}
           WSDIR: ${{ steps.ws.outputs.dir }}
+          MODEL: ${{ inputs.model }}
         run: |
           set +e
           cd "${WSDIR:-/tmp/ws}"
           printenv TASK > /tmp/task.txt
+          # ההזדהות באה מקובץ ולא מסוד: שלב "חידוש הזדהות" כתב לשם
+          # אסימון טרי. אם החידוש נכשל, הקובץ מכיל את האסימון שהמחשב
+          # דחף — כלומר אין רגרסיה מול המצב הקודם.
+          export CLAUDE_CODE_OAUTH_TOKEN="$(cat /tmp/claude_token.txt)"
+          # 08/11 — "אותו מנוע". המשתמש ביקש במפורש שהעבודה בענן תהיה
+          # זהה לעבודה במחשב, ובמחשב הסוכן רץ על Opus. בלי הדגל הזה
+          # הריצה בענן נפלה לדגם ברירת המחדל של ה-CLI, וזה הבדל איכות
+          # שהמשתמש הרגיש. fallback-model קיים כדי שגמר מכסה של Opus
+          # לא יבטל את הריצה אלא רק יוריד דגם.
           timeout "${MINUTES}m" claude -p "$(cat /tmp/task.txt)" \
+            --model "${MODEL:-opus}" --fallback-model sonnet \
             --dangerously-skip-permissions \
             --output-format text > /tmp/answer.txt 2> /tmp/err.txt
           rc=$?
