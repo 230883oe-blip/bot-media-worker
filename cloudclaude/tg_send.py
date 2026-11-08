@@ -19,6 +19,34 @@ import urllib.parse
 import urllib.request
 
 LIMIT = 3900
+CTX_LIMIT = 80
+
+
+def task_hint(path: str = "/tmp/task.txt") -> str:
+    """שורת ההקשר: מה הייתה הבקשה שעליה התשובה הזו עונה.
+
+    08/11 — למה זה נוסף: המשתמש קיבל בטלגרם "☁️ קלוד ענן:" ואחריו משפט
+    על הכנסת אורחים, בלי שום קשר למה שהוא כתב באותו רגע. התשובה מגיעה
+    דקות אחרי הבקשה, לפעמים בבוט אחר מזה שאליו נשלחה, ולכן הודעה בלי
+    הקשר היא חידה. הבקשה עצמה עטופה בפסקת הנחיות ארוכה, ומה שמעניין
+    הוא רק מה שאחרי "המשימה:" או אחרי הנקודתיים של בקשת הטקסט.
+    """
+    raw = read(path)
+    if not raw:
+        return ""
+    for marker in ("המשימה:", "קוד:"):
+        idx = raw.rfind(marker)
+        if idx >= 0:
+            raw = raw[idx + len(marker):]
+            break
+    else:
+        idx = raw.rfind(":\n")
+        if idx >= 0:
+            raw = raw[idx + 1:]
+    line = " ".join(raw.split())
+    if not line:
+        return ""
+    return line[:CTX_LIMIT] + ("…" if len(line) > CTX_LIMIT else "")
 
 
 def read(path: str) -> str:
@@ -56,13 +84,16 @@ def main() -> int:
     answer = read(sys.argv[1] if len(sys.argv) > 1 else "/tmp/answer.txt")
     err = read(sys.argv[2] if len(sys.argv) > 2 else "/tmp/err.txt")
 
+    hint = task_hint()
+    ctx = f'\nבתשובה לבקשתך: "{hint}"\n' if hint else ""
+
     if answer:
-        head = "☁️ קלוד ענן:\n\n"
+        head = "☁️ קלוד ענן:" + ctx + "\n"
     elif rc == "124":
-        head = "☁️ קלוד ענן: נגמר הזמן שהוקצב לריצה.\n\n"
+        head = "☁️ קלוד ענן: נגמר הזמן שהוקצב לריצה." + ctx + "\n"
         answer = err[-1500:] or "(אין פלט)"
     else:
-        head = f"☁️ קלוד ענן: הריצה נכשלה (קוד {rc}).\n\n"
+        head = f"☁️ קלוד ענן: הריצה נכשלה (קוד {rc})." + ctx + "\n"
         answer = err[-1500:] or "(אין פלט)"
 
     body = head + answer
